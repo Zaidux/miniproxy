@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+proxy.db
+.env
+venv/
+.venv/
