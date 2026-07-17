@@ -186,3 +186,32 @@ class Database:
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+    # ── Config key/value store ──────────────────────────────────────────
+
+    def get_config(self, key: str, default: str | None = None) -> str | None:
+        """Get a config value by key. Returns default if not found."""
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT value FROM config WHERE key=?", (key,)
+        ).fetchone()
+        conn.close()
+        return dict(row)["value"] if row else default
+
+    def set_config(self, key: str, value: str) -> None:
+        """Set a config value (upsert by key)."""
+        conn = self._connect()
+        conn.execute(
+            "INSERT INTO config (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+        conn.close()
+
+    def delete_config(self, key: str) -> None:
+        """Delete a config key."""
+        conn = self._connect()
+        conn.execute("DELETE FROM config WHERE key=?", (key,))
+        conn.commit()
+        conn.close()

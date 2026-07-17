@@ -14,6 +14,16 @@ app = Flask(__name__)
 db = Database()
 intruder = Intruder()
 
+
+# ── CORS (allow external API access) ────────────────────────────────
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    return response
+
 # Suppress SSL warnings for local repeater/intruder requests
 import urllib3  # noqa: E402
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -134,4 +144,5 @@ def intruder_results(req_id):
 
 if __name__ == "__main__":
     port = int(os.environ.get("MINIPROXY_PORT", 5000))
-    app.run(host="127.0.0.1", port=port, debug=True)
+    host = os.environ.get("MINIPROXY_HOST", "127.0.0.1")
+    app.run(host=host, port=port, debug=False)
