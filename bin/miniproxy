@@ -1,0 +1,24 @@
+#!/usr/bin/env node
+// MiniProxy launcher — delegates to the Python package (riciplay-miniproxy).
+//
+//   miniproxy <args>  →  python3 -m miniproxy <args>
+//
+// The Python package is installed by scripts/postinstall.js (pip install
+// riciplay-miniproxy). If python3 is missing the user gets a clear error
+// rather than a silent failure.
+
+const { spawn } = require('child_process');
+
+const args = process.argv.slice(2);
+const proc = spawn('python3', ['-m', 'miniproxy', ...args], { stdio: 'inherit' });
+
+proc.on('error', (err) => {
+  if (err.code === 'ENOENT') {
+    console.error('Error: python3 not found. MiniProxy is a Python tool — install Python 3.10+ first.');
+    process.exit(1);
+  }
+  console.error('Error:', err.message);
+  process.exit(1);
+});
+
+proc.on('close', (code) => process.exit(code ?? 1));

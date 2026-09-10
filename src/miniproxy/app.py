@@ -1,4 +1,5 @@
-"""MiniProxy Flask dashboard — serves the web UI and API endpoints for Proxy, Log, Repeater, and Intruder."""
+"""MiniProxy Flask dashboard — web UI and API for Log, Repeater, and Intruder."""
+from __future__ import annotations
 
 import json
 import os
@@ -7,15 +8,15 @@ from pathlib import Path
 import requests
 from flask import Flask, jsonify, render_template, request as flask_request
 
-from db import Database
-from intruder import Intruder, IntruderError
+from miniproxy.addon.db import Database
+from miniproxy.intruder import Intruder, IntruderError
 
 app = Flask(__name__)
 db = Database()
 intruder = Intruder()
 
-
 # ── CORS (allow external API access) ────────────────────────────────
+
 
 @app.after_request
 def add_cors_headers(response):
@@ -23,6 +24,7 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
+
 
 # Suppress SSL warnings for local repeater/intruder requests
 import urllib3  # noqa: E402
@@ -42,12 +44,22 @@ def index():
 
 @app.route("/api/proxy/status", methods=["GET", "POST"])
 def proxy_status():
+    """Capture status.
+
+    Since the v4 engine, capture is ALWAYS on — the old intercept toggle
+    gated capture on a config flag that fresh DBs didn't have, silently
+    producing routed-but-empty proxies. The endpoint stays for UI
+    compatibility and still stores the preference, but capture no longer
+    pauses.
+    """
     if flask_request.method == "POST":
         data = flask_request.get_json(silent=True) or {}
-        enabled = data.get("enabled", True)
-        db.set_intercept(enabled)
-        return jsonify({"intercept_enabled": enabled})
-    return jsonify({"intercept_enabled": db.get_intercept()})
+        db.set_intercept(bool(data.get("enabled", True)))
+    return jsonify({
+        "intercept_enabled": True,
+        "capture": "always",
+        "note": "v4 engine captures unconditionally; the toggle is kept for UI compatibility.",
+    })
 
 
 # ── Log API ────────────────────────────────────────────────────────────
@@ -55,7 +67,8 @@ def proxy_status():
 @app.route("/api/logs")
 def get_logs():
     since = flask_request.args.get("since", 0, type=int)
-    logs = db.get_logs(since_id=since)
+    limit = flask_request.args.get("limit", 100, type=int)
+    logs = db.get_logs(limit=min(max(limit, 1), 1000), since_id=since)
     return jsonify(logs)
 
 
@@ -143,6 +156,6 @@ def intruder_results(req_id):
 # ── Entry point ────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    port = int(os.environ.get("MINIPROXY_PORT", 5000))
-    host = os.environ.get("MINIPROXY_HOST", "127.0.0.1")
+    port = int(os.environ.get("MINIPROXY_DASHBOARD_PORT", 5000))
+    host = os.environ.get("MINIPROXY_DASHBOARD_HOST", "127.0.0.1")
     app.run(host=host, port=port, debug=False)

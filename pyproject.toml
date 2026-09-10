@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "riciplay-miniproxy"
+version = "0.4.0"
+description = "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "Zaidux"},
+]
+keywords = ["proxy", "mitmproxy", "interception", "security", "bugbounty", "repeater", "intruder"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: Internet :: Proxy Servers",
+]
+dependencies = [
+    "mitmproxy>=10.0.0",
+    "Flask>=3.0.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+miniproxy = "miniproxy.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Zaidux/miniproxy"
+Repository = "https://github.com/Zaidux/miniproxy"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/miniproxy"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/miniproxy",
+    "README.md",
+    "LICENSE",
+    "package.json",
+    "bin",
+    "scripts",
+]

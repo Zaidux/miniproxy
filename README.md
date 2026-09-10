@@ -1,99 +1,78 @@
 # MiniProxy
 
-A lightweight HTTP/S interception proxy for local security research — built with **mitmproxy**, **Flask**, and **SQLite**.
+A lightweight HTTP/S interception proxy for security research — the standalone Burp-style toolkit from the [Riciplay](https://github.com/Zaidux/Riciplay) ecosystem. Built on **mitmproxy**, **Flask**, and **SQLite**.
 
-## Features
+Ships the **v4 capture engine** (the same addon the Riciplay CLI embeds):
 
-- **Proxy** — Intercept HTTP/HTTPS traffic (toggle on/off). Live request feed streams to the dashboard.
-- **Log** — Every request/response stored in SQLite with full headers, bodies, and status codes.
-- **Repeater** — Select a logged request, edit method/headers/body, resend it, and inspect the response.
-- **Intruder** — Select a request, mark parameters with `§param§` placeholders, upload a wordlist, and fuzz each position. Results are highlighted by response status code.
+- **Always-on capture** — every request/response is logged with full headers, bodies, and status codes. (The old intercept toggle silently produced empty captures on fresh DBs; it's gone.)
+- **Static-asset streaming** — JS/CSS/images stream through without buffering, so heavy SPAs don't pay a per-flow decode tax.
+- **Timing** — `ttfb_ms` / `total_ms` on every flow. Oracles and timing side-channels need numbers.
+- **Scope guard** — `--scope '*.target.com'` keeps out-of-scope traffic out of your capture DB (or 403-blocks it with `--block-out-of-scope`).
+- **Repeater** — pick a logged request, edit method/headers/body, resend, inspect.
+- **Intruder** — mark parameters with `§param§` placeholders, supply a wordlist, fuzz every position; results highlighted by status code and stored in the DB.
 
-## Project Structure
-
-```
-miniproxy/
-├── proxy.py       # mitmproxy addon — intercepts traffic
-├── app.py         # Flask dashboard (API + UI)
-├── db.py          # SQLite database handler
-├── intruder.py    # Fuzzing engine (wordlist-based payload substitution)
-├── templates/
-│   └── index.html # SPA frontend (vanilla JS, dark theme)
-├── requirements.txt
-└── README.md
-```
-
-## Quick Start
-
-### 1. Install Dependencies
+## Install
 
 ```bash
-cd miniproxy
-pip install -r requirements.txt
+# Python (PyPI)
+pip install riciplay-miniproxy
+
+# or Node (npm — installs the Python package on postinstall)
+npm install -g riciplay-miniproxy
 ```
 
-### 2. Start the Proxy (mitmproxy)
+Requires Python 3.10+ and [mitmproxy](https://mitmproxy.org/).
+
+## Quick start
 
 ```bash
-mitmdump -s proxy.py --set block_global=false
+miniproxy start                          # proxy on :8080
+miniproxy start --scope '*.target.com'   # capture only in-scope traffic
+miniproxy dashboard                      # web UI on :5000 (Log/Repeater/Intruder)
 ```
 
-The proxy listens on **`127.0.0.1:8080`** by default.
-
-> **Note:** To intercept HTTPS traffic, you must install the mitmproxy CA certificate on your device/browser:
-> - Run `mitmproxy` once (without the addon), visit `http://mitm.it` in your browser while proxied, and download the certificate.
-> - Or copy the cert from `~/.mitmproxy/mitmproxy-ca-cert.pem`.
-
-### 3. Start the Dashboard (Flask)
+Then point your browser/system at `http://127.0.0.1:8080` (HTTPS interception uses mitmproxy's CA — run `mitmdump` once and install `~/.mitmproxy/mitmproxy-ca-cert.pem` if you haven't).
 
 ```bash
-python app.py
+miniproxy log                  # recent captured requests (with timing; reads the DB directly)
+miniproxy log --id 5           # full detail for request #5
+miniproxy send --url https://example.com/api --method POST \
+               --headers '{"Content-Type":"application/json"}' \
+               --body '{"key":"value"}'
+miniproxy status
+miniproxy stop
 ```
 
-Open **http://127.0.0.1:5000** in your browser.
+State (pid, port, default capture DB) lives under `~/.miniproxy/`.
 
-### 4. Configure Your Browser
+## The dashboard
 
-Set your browser's HTTP proxy to **`127.0.0.1:8080`**:
+`miniproxy dashboard` serves a dark-theme SPA:
 
-| Browser        | Steps |
-|---------------|-------|
-| **Firefox**   | Settings → Network Settings → Manual proxy → HTTP Proxy: `127.0.0.1`, Port: `8080` → ✓ "Also use this proxy for HTTPS" |
-| **Chrome**    | Settings → System → Open proxy settings → LAN settings → ✓ "Use a proxy server" → Address: `127.0.0.1`, Port: `8080` |
-| **curl**      | `curl -x http://127.0.0.1:8080 https://example.com` |
-| **wget**      | `wget -e use_proxy=yes -e http_proxy=127.0.0.1:8080 https://example.com` |
+- **Proxy** — capture status and scope
+- **Log** — live request feed; click any row for full headers/bodies/timing
+- **Repeater** — edit and resend any captured request
+- **Intruder** — `§param§` placeholders + wordlist fuzzing, results by status code
 
-### 5. Browse
+## Relation to the Riciplay CLI
 
-Navigate to any website. Requests appear live in the **Proxy** tab and are archived in the **Log** tab.
+The Riciplay CLI (`pip install riciplay-cli`) embeds this same engine with agent-first extras: per-session capture DBs, RULES.md-derived scope enforcement, headless replay with response diffing, and bounded payload sweeps driven by the AI agent. Use MiniProxy standalone when you want the manual Burp-like workflow; use Riciplay when you want the agent to drive.
 
-## Usage
+## Project structure
 
-### Proxy Tab
-- **Toggle** — Pause/resume interception. When OFF, traffic still flows but isn't logged.
-- **Live Feed** — Auto-updating table shows requests as they pass through the proxy.
+```
+src/miniproxy/
+├── addon/
+│   ├── proxy.py        # mitmproxy addon — v4 capture engine
+│   └── db.py           # SQLite handler (timing columns, intruder results, pruning)
+├── app.py              # Flask dashboard (API + UI)
+├── intruder.py         # §placeholder§ fuzzing engine
+├── server.py           # start/stop/status process manager
+└── __main__.py         # the `miniproxy` entry point (start/stop/status/
+                        #   dashboard/send/log — log and send work without
+                        #   any dashboard running)
+```
 
-### Log Tab
-- **Refresh** — Load all captured requests.
-- **Click a row** — Expand full headers, body, and response details.
+## License
 
-### Repeater Tab
-1. Select a request from the dropdown.
-2. Edit the method, URL, headers, or body.
-3. Click **Send** to fire the modified request.
-4. Inspect the response headers and body.
-
-### Intruder Tab
-1. Select a request from the dropdown.
-2. Edit the URL, headers, or body. Insert `§param§` placeholders where you want payloads injected (e.g. `id=§fuzz§`).
-3. Upload a wordlist (`.txt`, one word per line, max 1000).
-4. Click **Start Attack**.
-5. Results appear in a table. Rows are **color-coded by status code**. Click any row to see the full response.
-
-## Notes
-
-- This tool is intended for **local security research and education only**.
-- Responses are capped at 100 KB in the database.
-- Wordlists are limited to 1000 entries to prevent timeouts.
-- SSL verification is disabled for repeater/intruder requests (local lab use).
-- mitmproxy handles full HTTPS interception via its own CA.
+MIT

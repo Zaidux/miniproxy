@@ -1,0 +1,49 @@
+{
+  "name": "riciplay-miniproxy",
+  "version": "0.4.0",
+  "description": "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard",
+  "main": "index.js",
+  "bin": {
+    "miniproxy": "./bin/miniproxy"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepublishOnly": "echo \"Ensure the Python package riciplay-miniproxy is published to PyPI first\"",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zaidux/miniproxy.git"
+  },
+  "keywords": [
+    "proxy",
+    "mitmproxy",
+    "interception",
+    "security",
+    "bugbounty",
+    "repeater",
+    "intruder",
+    "pentesting"
+  ],
+  "author": "Zaidux <zaiduabubakar777@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Zaidux/miniproxy/issues"
+  },
+  "homepage": "https://github.com/Zaidux/miniproxy#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "files": [
+    "bin/",
+    "scripts/postinstall.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {},
+  "peerDependencies": {}
+}
