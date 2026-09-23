@@ -52,6 +52,19 @@ class TestParserConstruction:
         assert exc.value.code == 0
         assert "miniproxy" in capsys.readouterr().out
 
+    def test_port_accepts_auto_and_ints(self):
+        parser = cli.build_parser()
+        assert parser.parse_args(["start", "--port", "auto"]).port == "auto"
+        assert parser.parse_args(["start", "--port", "9001"]).port == 9001
+        assert parser.parse_args(["start"]).port == 8080
+        assert parser.parse_args(
+            ["start", "--dashboard-port", "auto"]).dashboard_port == "auto"
+        assert parser.parse_args(["dashboard", "--port", "auto"]).port == "auto"
+
+    def test_port_rejects_garbage(self):
+        with pytest.raises(SystemExit):
+            cli.build_parser().parse_args(["start", "--port", "not-a-port"])
+
 
 class TestMainDispatch:
     def test_version_prints_and_exits_zero(self, capsys, monkeypatch):

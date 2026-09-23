@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -60,19 +61,72 @@ class TestStartValidation:
         assert r["status"] == "error"
         assert "install mitmproxy" in r["message"]
 
-    def test_start_rejects_busy_port(self, state):
+    def test_busy_port_falls_back_to_next_free(self, state, monkeypatch):
+        """New contract: a busy port moves up to the next free one."""
         import socket
 
         blocker = socket.socket()
         blocker.bind(("127.0.0.1", 0))
         blocker.listen(1)
         port = blocker.getsockname()[1]
+        proc = subprocess.Popen(
+            ["python3", "-c", "# mitmdump\nimport time; time.sleep(30)"],
+        )
+        time.sleep(0.2)
+
+        def fake_popen(cmd, **kwargs):
+            return proc
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(srv, "_wait_listening", lambda p, pr, timeout=8.0: True)
         try:
-            r = srv.start(port=port)
-            assert r["status"] == "error"
-            assert str(port) in r["message"]
+            r = srv.start(port=port, dashboard=False)
+            assert r["status"] == "started"
+            assert r["port"] in range(port + 1, port + 20)
+            assert r["fallback"] is True
+            assert "busy" in r["message"].lower()
+            assert srv.PORT_FILE.read_text() == str(r["port"])
         finally:
             blocker.close()
+            proc.kill()
+            proc.wait()
+
+    def test_start_port_auto_picks_free_port(self, state, monkeypatch):
+        import socket
+
+        proc = subprocess.Popen(
+            ["python3", "-c", "# mitmdump\nimport time; time.sleep(30)"],
+        )
+        time.sleep(0.2)
+
+        def fake_popen(cmd, **kwargs):
+            return proc
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(srv, "_wait_listening", lambda p, pr, timeout=8.0: True)
+        try:
+            r = srv.start(port="auto", dashboard=False)
+            assert r["status"] == "started"
+            assert isinstance(r["port"], int) and 1024 <= r["port"] <= 65535
+            assert r["fallback"] is False
+            assert srv.PORT_FILE.read_text() == str(r["port"])
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def test_resolve_port_variants(self, state):
+        import socket
+
+        assert srv._resolve_port("AUTO") == srv._resolve_port("auto")
+        assert isinstance(srv._resolve_port("auto"), int)
+        assert srv._resolve_port("8085") == 8085
+        assert srv._resolve_port(8085) == 8085
+        assert srv._resolve_port(None) is not None
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            taken = s.getsockname()[1]
+        chosen = srv._resolve_port("auto")
+        assert chosen != taken or not srv._port_free(taken)  # never a bound port
 
     def test_start_without_dashboard_leaves_no_dash_files(self, state, monkeypatch):
         """Fake a successful mitmdump launch: no dashboard pid/port files."""

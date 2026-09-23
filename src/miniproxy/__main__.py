@@ -23,6 +23,18 @@ import os
 import sys
 
 
+def _port_arg(value: str) -> int | str:
+    """--port values: an int, or 'auto' for always-pick-a-free-port."""
+    text = str(value).strip().lower()
+    if text in ("auto", "0"):
+        return "auto"
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid port {value!r} — use a number or 'auto'") from None
+
+
 def _same_option(p: argparse.ArgumentParser, flag: str) -> dict:
     """Copy an option's kwargs from one subparser to build it on another.
 
@@ -67,7 +79,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     p_start = sub.add_parser("start", help="Start the interception proxy (+ web dashboard)")
-    p_start.add_argument("--port", type=int, default=8080)
+    p_start.add_argument("--port", type=_port_arg, default=8080,
+                         help="Proxy listen port (default 8080; 'auto' always "
+                              "picks a free port; a busy port moves up)")
     p_start.add_argument("--db", default=None, help="SQLite capture DB path")
     p_start.add_argument("--scope", nargs="*", default=None,
                          help="Capture-scope hosts (*.domain wildcards); "
@@ -75,8 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--block-out-of-scope", action="store_true",
                          help="403-block out-of-scope traffic instead of passing it through")
     p_start.add_argument("--mitmdump", default="mitmdump")
-    p_start.add_argument("--dashboard-port", type=int, default=5000,
-                         help="Port for the web dashboard (default 5000)")
+    p_start.add_argument("--dashboard-port", type=_port_arg, default=5000,
+                         help="Port for the web dashboard (default 5000; "
+                              "'auto'/busy → next free port)")
     p_start.add_argument("--dashboard-host", default="127.0.0.1",
                          help="Bind address for the web dashboard "
                               "(default 127.0.0.1; pass 0.0.0.0 explicitly for LAN access)")
@@ -96,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Proxy + dashboard status")
 
     p_dash = sub.add_parser("dashboard", help="Run the Flask dashboard")
-    p_dash.add_argument("--port", type=int, default=5000)
+    p_dash.add_argument("--port", type=_port_arg, default=5000)
     p_dash.add_argument("--host", default="127.0.0.1")
     p_dash.add_argument("--token", default=None,
                         help="Require a token on mutating endpoints")
@@ -159,6 +174,13 @@ def main(argv: list[str] | None = None) -> int:
             print("⚠  Dashboard is LAN-exposed: captures contain tokens, cookies "
                   "and session data. Pass --dashboard-token to require auth.")
         print(result["message"])
+        dash = result.get("dashboard") or {}
+        if dash.get("fallback"):
+            print("ℹ  Dashboard port was busy — it bound :%s instead. "
+                  "Use this port in the dashboard URL." % dash.get("port"))
+        elif result.get("fallback"):
+            print("ℹ  Requested port was busy — the proxy took :%s instead. "
+                  "Point clients at this port." % result.get("port"))
         if result.get("dashboard"):
             print(f"Web UI: {result['dashboard']['url']}  (mirrors `miniproxy tui`)")
         return 0 if result["status"] in ("started", "already_running") else 1
@@ -183,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "dashboard":
         import miniproxy.app as appmod
+        dash_port = args.port
+        if dash_port == "auto":
+            from miniproxy.server import _next_free_port
+            dash_port = _next_free_port(5000) or 5000
         if args.token:
             os.environ["MINIPROXY_DASHBOARD_TOKEN"] = args.token
             appmod.DASHBOARD_TOKEN = args.token

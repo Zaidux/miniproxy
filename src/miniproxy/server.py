@@ -82,6 +82,38 @@ def _port_free(port: int) -> bool:
             return False
 
 
+def _next_free_port(preferred: int, *, attempts: int = 20) -> Optional[int]:
+    """First free port at *preferred* or above (None if all are taken).
+
+    Scans preferred..preferred+attempts-1. Preferring the requested port
+    first keeps the common case deterministic — the fallback only kicks
+    in when something else already holds it.
+    """
+    for candidate in range(int(preferred), int(preferred) + max(int(attempts), 1)):
+        if _port_free(candidate):
+            return candidate
+    return None
+
+
+def _resolve_port(port: int | str | None) -> Optional[int]:
+    """Normalize a requested port: "auto"/"0"/None → a free ephemeral port.
+
+    Numbers (and numeric strings) pass through untouched; the busy→next-free
+    fallback happens later in start(), once the requested port is known.
+    """
+    if port is None:
+        return _next_free_port(DEFAULT_PORT)
+    if isinstance(port, str):
+        text = port.strip().lower()
+        if text in ("auto", "0", ""):
+            return _next_free_port(DEFAULT_PORT)
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return int(port)
+
+
 def _wait_listening(port: int, proc: subprocess.Popen, timeout: float = 8.0) -> bool:
     """Poll until the proxy accepts connections (or the process dies)."""
     return _wait_listening_on("127.0.0.1", port, proc, timeout)
@@ -119,14 +151,14 @@ def _read_dash_port() -> Optional[int]:
 
 def start(
     *,
-    port: int = DEFAULT_PORT,
+    port: int | str = DEFAULT_PORT,
     db_path: Optional[str] = None,
     scope_hosts: Optional[list[str]] = None,
     out_of_scope: str = "skip",
     mitmdump_path: str = "mitmdump",
     extra_args: Optional[list[str]] = None,
     dashboard: bool = True,
-    dash_port: int = DEFAULT_DASH_PORT,
+    dash_port: int | str = DEFAULT_DASH_PORT,
     dash_host: str = "127.0.0.1",
     dash_token: Optional[str] = None,
     with_dashboard: Optional[bool] = None,
@@ -134,7 +166,11 @@ def start(
     """Start the interception proxy as a background subprocess.
 
     Args:
-        port:          Explicit listen port (default 8080; must be free).
+        port:          Listen port (default 8080). ``"auto"`` always picks
+                       a free port; if the requested port is busy the start
+                       falls back to the next free port and reports it in
+                       the result's ``port``/``message`` (and
+                       ``fallback``=True).
         db_path:       SQLite capture DB (default ``~/.miniproxy/proxy.db``).
         scope_hosts:   Optional capture-scope host list (``*.domain``
                        wildcards). Out-of-scope traffic is passed through
@@ -145,7 +181,9 @@ def start(
         dashboard:     Also launch the web dashboard (default True) and
                        include its URL in the result. Capture is unchanged —
                        the dashboard only reads the same SQLite DB.
-        dash_port:     Port for the web dashboard (default 5000).
+        dash_port:     Port for the web dashboard (default 5000); same
+                       busy→next-free fallback and ``"auto"`` support as
+                       *port*.
         dash_host:     Bind address for the dashboard (default 127.0.0.1;
                        pass 0.0.0.0 explicitly to expose it on the LAN).
         dash_token:    Require this token on the dashboard's mutating
@@ -161,7 +199,13 @@ def start(
             "message": f"MiniProxy is already running (PID {pid}).",
         }
         if dashboard or with_dashboard:
-            result["dashboard"] = _ensure_dashboard(db_path, dash_port, dash_host, dash_token)
+            # "auto" must not clobber a dashboard that is already up: the
+            # ensure path below reports it with its recorded port.
+            requested_dash = dash_port
+            result["dashboard"] = _ensure_dashboard(
+                db_path, _resolve_port(requested_dash) or DEFAULT_DASH_PORT,
+                dash_host, dash_token,
+            )
         return result
     if pid is not None:
         # Dead or recycled PID — clean the stale state and start fresh.
@@ -173,10 +217,20 @@ def start(
         return {"status": "error",
                 "message": f"Addon not found at {script} (broken install?)."}
 
-    port = int(port)
-    if not _port_free(port):
+    port = _resolve_port(port)
+    if port is None:
         return {"status": "error",
-                "message": f"Port {port} is already in use — pass --port."}
+                "message": "--port auto: no free port found (tried 20 candidates)."}
+    port = int(port)
+    fallback_port = False
+    if not _port_free(port):
+        moved = _next_free_port(port)
+        if moved is None:
+            return {"status": "error",
+                    "message": f"Port {port} is already in use and no free "
+                               f"port was found in {port}..{port + 19}."}
+        fallback_port = True
+        port = moved
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     db = str(db_path or os.environ.get("MINIPROXY_DB_PATH")
@@ -228,8 +282,14 @@ def start(
         "pid": proc.pid,
         "port": port,
         "db": db,
+        "fallback": fallback_port,
         "message": f"MiniProxy started on :{port} (PID {proc.pid}, db={db}{scope_note})",
     }
+    if fallback_port:
+        result["message"] = (
+            f"MiniProxy started on :{port} — requested port was busy, "
+            f"moved up (PID {proc.pid}, db={db}{scope_note})"
+        )
     if dashboard or with_dashboard:
         result["dashboard"] = _ensure_dashboard(db, dash_port, dash_host, dash_token)
     return result
@@ -237,7 +297,7 @@ def start(
 
 def _ensure_dashboard(
     db_path: Optional[str],
-    dash_port: int,
+    dash_port: int | str,
     dash_host: str = "127.0.0.1",
     dash_token: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -246,7 +306,9 @@ def _ensure_dashboard(
     Returns a dict with ``url`` so callers (CLI, TUI, tests) can point the
     user at a browser without guessing ports. The bind address defaults to
     loopback; LAN exposure is an explicit caller choice (and should come
-    with a token).
+    with a token). *dash_port* accepts "auto" and falls back to the next
+    free port when the requested one is busy (the result's ``port`` and
+    ``url`` reflect what actually bound).
     """
     dash_pid = _read_dash_pid()
     if dash_pid is not None and _process_exists(dash_pid) and _pid_matches(dash_pid, "miniproxy", "dashboard"):
@@ -261,6 +323,20 @@ def _ensure_dashboard(
     if dash_pid is not None:
         DASH_PID_FILE.unlink(missing_ok=True)
         DASH_PORT_FILE.unlink(missing_ok=True)
+
+    resolved = _resolve_port(dash_port)
+    if resolved is None:
+        return {"status": "error", "message": "--dashboard-port auto: no free port found."}
+    dash_port = resolved
+    fallback_dash = False
+    if not _port_free(dash_port):
+        moved = _next_free_port(dash_port)
+        if moved is None:
+            return {"status": "error",
+                    "message": f"Dashboard port {dash_port} is already in use and "
+                               f"no free port was found in {dash_port}..{dash_port + 19}."}
+        fallback_dash = True
+        dash_port = moved
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -290,8 +366,14 @@ def _ensure_dashboard(
                     "status": "started",
                     "pid": proc.pid,
                     "port": dash_port,
+                    "fallback": fallback_dash,
                     "url": f"http://{dash_host}:{dash_port}",
-                    "message": f"Dashboard running at http://{dash_host}:{dash_port}",
+                    "message": (
+                        f"Dashboard running at http://{dash_host}:{dash_port}"
+                        if not fallback_dash else
+                        f"Dashboard running at http://{dash_host}:{dash_port} "
+                        "— requested port was busy, moved up"
+                    ),
                 }
         except OSError:
             if proc.poll() is not None:

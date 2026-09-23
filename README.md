@@ -29,6 +29,7 @@ Requires Python 3.10+ and [mitmproxy](https://mitmproxy.org/).
 
 ```bash
 miniproxy start                          # proxy on :8080 + web UI on :5000 (URL is printed)
+miniproxy start --port auto              # pick any free port (busy ports also move up automatically)
 miniproxy start --scope '*.target.com'   # capture only in-scope traffic
 miniproxy tui                            # terminal UI (live feed, repeater, filters)
 miniproxy dashboard                      # web UI in the foreground (Log/Repeater/Intruder)

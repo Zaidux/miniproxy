@@ -37,14 +37,20 @@ Or point at a specific binary: `miniproxy start --mitmdump /usr/local/bin/mitmdu
 
 ## "Port 8080 is already in use"
 
-Something else (often an old mitmdump) holds the port.
+Since the dynamic-port update this rarely errors at all: if the requested
+port is busy, MiniProxy **moves up to the next free port** and says so in
+the startup output ("requested port was busy, moved up"). Everything
+else — dashboard URL, `miniproxy connect`, the connect wizard — reads the
+actual bound port from state, so follow the printed addresses.
+
+Prefer a deterministic pick? `--port auto` always chooses a free port:
 
 ```bash
-miniproxy stop                      # clear MiniProxy's own state first
-miniproxy start --port 8081         # or pick another port
+miniproxy start --port auto --dashboard-port auto
+miniproxy status                    # shows where it actually landed
 ```
 
-To find the squatter: `lsof -i :8080` or `ss -ltnp | grep 8080`.
+To see what holds a specific port: `lsof -i :8080` or `ss -ltnp | grep 8080`.
 
 ## "Port 5000 is already in use" (dashboard)
 

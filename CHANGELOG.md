@@ -35,6 +35,10 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
     scannable ANSI QR of the connect page (`--qr yes|no|auto`,
     `--host/--port` overrides).
   - `miniproxy version` subcommand.
+  - **Dynamic port selection** — a busy `--port` no longer aborts startup:
+    MiniProxy moves up to the next free port and reports the choice (also
+    for `--dashboard-port`). `--port auto` / `--dashboard-port auto` always
+    pick a free port deterministically.
 
 ### Fixed
 - **Every `miniproxy` invocation crashed** with
@@ -44,7 +48,8 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
   a separate function covered by regression tests that assert every
   subcommand registers exactly once and parses.
 - `miniproxy web --port N` passed the port as a *string* (`_same_option`
-  dropped `type=` when copying options from `start` to `web`).
+  dropped `type=` when copying options from `start` to `web`), and the
+  copied option silently lost `--port auto` support.
 - Docs: PEP 668 (`externally-managed-environment`) install guidance —
   pipx/venv instead of `--break-system-packages`, which downgrades
   shared libraries other tools depend on (`docs/setup.md`,
