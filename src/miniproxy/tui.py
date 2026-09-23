@@ -29,6 +29,8 @@ from __future__ import annotations
 import json
 import os
 import shlex
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from textual import work
@@ -155,6 +157,7 @@ class HelpScreen(ModalScreen[None]):
             ("i", "Intruder results for the selected request"),
             ("c", "Copy request as curl to clipboard"),
             ("y", "Copy response body to clipboard"),
+            ("e", "Save response body to a file"),
             ("p", "Toggle the proxy (start / stop)"),
             ("R", "Force-refresh the request table"),
             ("f / t / s", "Focus URL / method / status filter"),
@@ -365,6 +368,7 @@ class MiniProxyTUI(App[None]):
         Binding("i", "show_intruder", "Intruder"),
         Binding("c", "copy_curl", "Copy curl"),
         Binding("y", "copy_body", "Copy body"),
+        Binding("e", "save_body", "Save body"),
         Binding("f", "focus_url_filter", "URL filter"),
         Binding("t", "focus_method_filter", "Method"),
         Binding("s", "focus_status_filter", "Status"),
@@ -631,6 +635,14 @@ class MiniProxyTUI(App[None]):
             req_line.append(f"{k}: ", style="bold")
             req_line.append(f"{v}\n", style="dim")
         body = str(row.get("body") or "")
+        # Truncation notice for the request body (original length recorded
+        # at capture time in request_body_len).
+        req_len = row.get("request_body_len")
+        req_note = (
+            f" ⚠ truncated at {len(body)} B (original {req_len} B)"
+            if isinstance(req_len, int) and req_len > len(body)
+            else ""
+        )
         if body:
             try:
                 body_block: Any = Syntax(body, "json", theme="ansi_dark", word_wrap=True)
@@ -641,7 +653,7 @@ class MiniProxyTUI(App[None]):
         self.query_one("#viewer-request", DetailViewer).load(
             Group(
                 Panel(req_line, title="Request line & headers", border_style="dim"),
-                Panel(body_block, title="Body", border_style="dim"),
+                Panel(body_block, title=f"Body{req_note}", border_style="dim"),
             )
         )
 
@@ -659,6 +671,14 @@ class MiniProxyTUI(App[None]):
             resp_headers.append(f"{v}\n", style="dim")
         resp_body = str(row.get("response_body") or "")
         content_type = str(row.get("content_type") or "")
+        # Truncation notice: bodies are stored capped (default 100 KB); the
+        # *_body_len columns record the original size, so we can say so.
+        resp_len = row.get("response_body_len")
+        resp_note = (
+            f" ⚠ truncated at {len(resp_body)} B (original {resp_len} B)"
+            if isinstance(resp_len, int) and resp_len > len(resp_body)
+            else ""
+        )
         if "json" in content_type and resp_body:
             try:
                 resp_body_block: Any = Syntax(resp_body, "json", theme="ansi_dark", word_wrap=True)
@@ -669,7 +689,7 @@ class MiniProxyTUI(App[None]):
         resp_viewer.load(
             Group(
                 Panel(resp_headers, title=f"Response {code}", border_style="dim"),
-                Panel(resp_body_block, title=f"Body ({content_type or 'unknown type'})", border_style="dim"),
+                Panel(resp_body_block, title=f"Body ({content_type or 'unknown type'}){resp_note}", border_style="dim"),
             )
         )
 
@@ -746,6 +766,31 @@ class MiniProxyTUI(App[None]):
             self.notify("response body copied", timeout=2)
         except Exception as exc:
             self.notify(f"copy failed: {exc}", severity="error", timeout=4)
+
+    def action_save_body(self) -> None:
+        """Write the selected row's response body to a timestamped file.
+
+        The CLI can't pop a native save dialog, so we write next to the cwd
+        (falling back to the state dir) and tell the user where it landed.
+        """
+        row = self._selected_row()
+        if row is None:
+            self.notify("Select a captured request first", severity="warning")
+            return
+        body = str(row.get("response_body") or "")
+        if not body:
+            self.notify("No response body captured", severity="warning")
+            return
+        stem = os.path.basename((row.get("url") or "request").rstrip("/").split("?")[0]) or f"body-{row.get('id', 'x')}"
+        stem = "".join(c for c in stem if c.isalnum() or c in "._-") or f"body-{row.get('id', 'x')}"
+        target_dir = Path.cwd() if os.access(Path.cwd(), os.W_OK) else STATE_DIR
+        target = target_dir / f"miniproxy-{stem[:40]}-{datetime.now():%Y%m%d-%H%M%S}.txt"
+        try:
+            target.write_text(body, encoding="utf-8", errors="replace")
+        except OSError as exc:
+            self.notify(f"save failed: {exc}", severity="error", timeout=4)
+            return
+        self.notify(f"saved → {target}", timeout=4)
 
     # ── Repeater & help ─────────────────────────────────────────────────
 

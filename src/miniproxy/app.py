@@ -9,27 +9,66 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+import threading
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
 
 import requests
-from flask import Flask, jsonify, render_template, request as flask_request
+from flask import (
+    Response,
+    Flask,
+    jsonify,
+    render_template,
+    request as flask_request,
+)
 
 from miniproxy import server as proxy_server
 from miniproxy.addon.db import Database
-from miniproxy.intruder import Intruder, IntruderError
+from miniproxy.intruder import Intruder
 
 app = Flask(__name__)
 db = Database()
 intruder = Intruder()
 
-# ── CORS (allow external API access) ────────────────────────────────
+# Optional dashboard auth: set MINIPROXY_DASHBOARD_TOKEN and every mutating
+# endpoint (plus the UI itself) requires the token via the X-MiniProxy-Token
+# header or ?token= query parameter. GETs stay open so plain links/exports
+# work; anything that can change state or drive the proxy is gated.
+DASHBOARD_TOKEN = os.environ.get("MINIPROXY_DASHBOARD_TOKEN", "")
+
+# ── CORS + optional token auth ──────────────────────────────────────
+
+
+@app.before_request
+def _token_auth():
+    if not DASHBOARD_TOKEN:
+        return None  # auth disabled (default for a loopback-only dashboard)
+    if flask_request.method in ("GET", "HEAD", "OPTIONS"):
+        return None  # read-only access stays open
+    supplied = (
+        flask_request.headers.get("X-MiniProxy-Token")
+        or flask_request.args.get("token")
+        or ""
+    )
+    if supplied == DASHBOARD_TOKEN:
+        return None
+    return jsonify({"error": "unauthorized — missing or wrong token"}), 401
 
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    # Only echo the dashboard's own origin; `*` would let any website read
+    # captures (or use the token from a same-page script) cross-origin.
+    origin = flask_request.headers.get("Origin", "")
+    if origin.startswith(("http://127.0.0.1", "http://localhost")):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, Authorization, X-Requested-With, X-MiniProxy-Token"
+        )
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
 
 
@@ -38,6 +77,41 @@ import urllib3  # noqa: E402
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 MAX_REPEATER_BODY = 50000
+
+# ── Background intruder runs ────────────────────────────────────────
+# Attacks used to run inside the HTTP request thread: a 1000-word wordlist
+# blocked the dashboard for the whole run and the browser timed out. Now the
+# attack executes in a daemon thread and clients poll /api/intruder/status.
+_intruder_lock = threading.Lock()
+_intruder_job: dict[str, Any] | None = None  # {request_id, running, progress, results, error, started}
+
+
+def _run_intruder_job(req_id: int, base: dict, wordlist: list[str]) -> None:
+    global _intruder_job
+    try:
+        results = intruder.run_attack(base, wordlist, req_id)
+        try:
+            db.store_intruder_results(results)
+        except Exception:
+            pass  # results are still returned to the client even if persistence fails
+        with _intruder_lock:
+            _intruder_job = {
+                "request_id": req_id, "running": False, "progress": len(wordlist),
+                "total": len(wordlist), "results": results, "error": None,
+            }
+    except Exception as exc:
+        with _intruder_lock:
+            _intruder_job = {
+                "request_id": req_id, "running": False,
+                "progress": 0, "total": len(wordlist),
+                "results": [], "error": str(exc),
+            }
+
+
+def _safe_filename(name: str, fallback: str = "miniproxy") -> str:
+    """Sanitize a user-supplied string for use in a Content-Disposition filename."""
+    cleaned = "".join(c for c in name if c.isalnum() or c in "._-").strip("._-")
+    return cleaned or fallback
 
 
 # ── Routes ─────────────────────────────────────────────────────────────
@@ -104,8 +178,33 @@ def proxy_toggle():
 def get_logs():
     since = flask_request.args.get("since", 0, type=int)
     limit = flask_request.args.get("limit", 100, type=int)
-    logs = db.get_logs(limit=min(max(limit, 1), 1000), since_id=since)
+    # Server-side filters — SQL-level, so exports/polls over huge DBs stay
+    # bounded instead of shipping everything and filtering client-side.
+    method = flask_request.args.get("method", "").strip()
+    status_class = flask_request.args.get("status", "").strip()
+    url_substr = flask_request.args.get("url", "").strip()
+    try:
+        logs = db.get_logs(
+            limit=min(max(limit, 1), 1000), since_id=since,
+            method=method, status_class=status_class, url_substr=url_substr,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     return jsonify(logs)
+
+
+@app.route("/api/logs/count")
+def get_logs_count():
+    """Matched-row count for the current filters (for 'N of M captures')."""
+    try:
+        total = db.count_logs(
+            method=flask_request.args.get("method", "").strip(),
+            status_class=flask_request.args.get("status", "").strip(),
+            url_substr=flask_request.args.get("url", "").strip(),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"count": total})
 
 
 @app.route("/api/logs/<int:req_id>")
@@ -189,20 +288,318 @@ def intruder_start():
     if base is None:
         return jsonify({"error": "base request not found"}), 404
 
-    try:
-        results = intruder.run_attack(base, wordlist, int(req_id))
-        db.store_intruder_results(results)
-        return jsonify({"results": results, "count": len(results)})
-    except IntruderError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": f"attack failed: {e}"}), 500
+    global _intruder_job
+    with _intruder_lock:
+        if _intruder_job and _intruder_job.get("running"):
+            return jsonify({
+                "error": "an attack is already running",
+                "job": {k: _intruder_job[k] for k in ("request_id", "progress", "total")},
+            }), 409
+        _intruder_job = {
+            "request_id": int(req_id), "running": True,
+            "progress": 0, "total": len(wordlist), "results": [], "error": None,
+        }
+    threading.Thread(
+        target=_run_intruder_job, args=(int(req_id), base, list(wordlist)),
+        daemon=True, name="miniproxy-intruder",
+    ).start()
+    return jsonify({"started": True, "total": len(wordlist)}), 202
+
+
+@app.route("/api/intruder/status")
+def intruder_status():
+    """Poll the running (or last) attack: progress bar + finished results."""
+    with _intruder_lock:
+        job = dict(_intruder_job) if _intruder_job else None
+    if not job:
+        return jsonify({"running": False, "has_result": False})
+    payload = {
+        "running": bool(job.get("running")),
+        "request_id": job.get("request_id"),
+        "progress": job.get("progress", 0),
+        "total": job.get("total", 0),
+        "error": job.get("error"),
+        "has_result": bool(job.get("results")),
+    }
+    if not job.get("running"):
+        payload["results"] = job.get("results", [])
+        payload["count"] = len(job.get("results", []))
+    return jsonify(payload)
 
 
 @app.route("/api/intruder/results/<int:req_id>")
 def intruder_results(req_id):
     results = db.get_intruder_results(req_id)
     return jsonify(results)
+
+
+# ── Export / maintenance API ─────────────────────────────────────────
+
+
+@app.route("/api/export/har")
+def export_har():
+    """Export the filtered capture set as HAR 1.2 (DevTools / Burp importable)."""
+    f = _export_filters()
+    try:
+        rows = db.get_logs(limit=f["limit"], since_id=f["since"],
+                           method=f["method"], status_class=f["status"],
+                           url_substr=f["url"])
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # corrupted DB / IO error
+        return jsonify({"error": f"export failed: {exc}"}), 500
+    har = {
+        "log": {
+            "version": "1.2",
+            "creator": {"name": "MiniProxy", "version": _mp_version()},
+            "entries": [_row_to_har(r) for r in rows],
+        }
+    }
+    body = json.dumps(har, indent=2, default=str)
+    fname = _safe_filename(f["url"] or "captures")
+    return Response(
+        body,
+        mimetype="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}.har"',
+            "X-Capture-Count": str(len(rows)),
+        },
+    )
+
+
+@app.route("/api/export/json")
+def export_json():
+    """Export the filtered capture set as MiniProxy's own JSON dump."""
+    f = _export_filters()
+    try:
+        rows = db.get_logs(limit=f["limit"], since_id=f["since"],
+                           method=f["method"], status_class=f["status"],
+                           url_substr=f["url"])
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": f"export failed: {exc}"}), 500
+    body = json.dumps(rows, indent=2, default=str)
+    fname = _safe_filename(f["url"] or "captures")
+    return Response(
+        body,
+        mimetype="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}.json"',
+            "X-Capture-Count": str(len(rows)),
+        },
+    )
+
+
+@app.route("/api/export/db")
+def export_db():
+    """Download a consistent snapshot of the whole capture DB (SQLite)."""
+    import tempfile
+
+    src = Path(db.db_path)
+    if not src.exists():
+        return jsonify({"error": "capture DB does not exist yet"}), 404
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix="miniproxy-export-", suffix=".db")
+        os.close(fd)
+        src_conn = sqlite3.connect(src)
+        try:
+            dst_conn = sqlite3.connect(tmp)
+            try:
+                src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
+        finally:
+            src_conn.close()
+        # Read into memory and delete the temp file immediately — the DB is
+        # size-capped (default 50 MB) and this avoids leaking temp files on
+        # clients that never "close" the response.
+        payload = Path(tmp).read_bytes()
+        Path(tmp).unlink(missing_ok=True)
+        tmp = None
+    except Exception as exc:
+        if tmp:
+            Path(tmp).unlink(missing_ok=True)
+        return jsonify({"error": f"snapshot failed: {exc}"}), 500
+
+    return Response(
+        payload,
+        mimetype="application/x-sqlite3",
+        headers={"Content-Disposition": 'attachment; filename="miniproxy-captures.db"'},
+    )
+
+
+@app.route("/api/export/body/<int:req_id>")
+def export_body(req_id):
+    """Download a stored response body (falls back to the request body)."""
+    row = db.get_request(req_id)
+    if row is None:
+        return jsonify({"error": "not found"}), 404
+    payload = row.get("response_body") or ""
+    if not payload and row.get("body"):
+        payload = row["body"]
+    if not payload:
+        return jsonify({"error": "this capture has no stored body"}), 404
+    ext = _body_ext(row.get("content_type") or "")
+    fname = _safe_filename(row.get("url", "").rstrip("/").rsplit("/", 1)[-1] or f"body-{req_id}")
+    return Response(
+        payload,
+        mimetype=(row.get("content_type") or "text/plain").split(";")[0].strip() or "text/plain",
+        headers={"Content-Disposition": f'attachment; filename="{fname}.{ext}"'},
+    )
+
+
+@app.route("/api/clear", methods=["POST"])
+def clear_captures():
+    """Delete all captures and intruder results (irreversible)."""
+    try:
+        removed = db.clear()
+    except Exception as exc:
+        return jsonify({"error": f"clear failed: {exc}"}), 500
+    return jsonify({"removed": removed})
+
+
+# ── Export helpers ─────────────────────────────────────────────────────
+
+
+def _mp_version() -> str:
+    try:
+        from miniproxy import __version__
+
+        return __version__
+    except Exception:
+        return "unknown"
+
+
+def _parse_headers(raw: object) -> list[dict[str, str]]:
+    """Convert a stored JSON headers blob into HAR's name/value list."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+    if not isinstance(raw, dict):
+        return []
+    return [{"name": str(k), "value": str(v)} for k, v in raw.items()]
+
+
+def _iso_to_millis(ts: object) -> int:
+    """Best-effort ISO-8601 → epoch milliseconds (HAR startedDateTime needs ISO,
+    but some tooling prefers millis; we keep ISO and use millis only for order)."""
+    if isinstance(ts, str):
+        try:
+            from datetime import datetime
+
+            return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _row_to_har(r: dict) -> dict:
+    """Map a capture row onto a HAR 1.2 entry (bodies included when stored)."""
+    parts = urlsplit(r.get("url", ""))
+    qs = []
+    if parts.query:
+        from urllib.parse import parse_qsl
+
+        qs = [{"name": k, "value": v} for k, v in parse_qsl(parts.query, keep_blank_values=True)]
+    code = r.get("response_code")
+    pending = code is None
+    error = None
+    if code == 0:
+        error = "transport error (see capture detail)"
+        code = 0
+    started = r.get("timestamp") or ""
+    total_ms = float(r.get("total_ms") or 0.0)
+    req_body = r.get("body") or ""
+    resp_body = r.get("response_body")
+    return {
+        "startedDateTime": started,
+        "time": round(total_ms, 2),
+        "_miniproxyId": r.get("id"),
+        "_ttfbMs": r.get("ttfb_ms"),
+        "request": {
+            "method": r.get("method", "GET"),
+            "url": r.get("url", ""),
+            "httpVersion": "HTTP/1.1",
+            "headers": _parse_headers(r.get("headers")),
+            "queryString": qs,
+            "headersSize": -1,
+            "bodySize": len(req_body.encode("utf-8", "replace")),
+            "postData": (
+                {
+                    "mimeType": "application/octet-stream",
+                    "text": req_body,
+                }
+                if req_body
+                else None
+            ),
+        },
+        "response": {
+            "status": int(code) if code else 0,
+            "statusText": "" if pending else ("" if not code else ""),
+            "httpVersion": "HTTP/1.1",
+            "headers": _parse_headers(r.get("response_headers")),
+            "content": {
+                "size": len((resp_body or "").encode("utf-8", "replace")),
+                "mimeType": r.get("content_type") or "",
+                "text": resp_body if isinstance(resp_body, str) else "",
+                "comment": "response body not captured (non-API content type)" if resp_body is None else None,
+            },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": len((resp_body or "").encode("utf-8", "replace")),
+            "_transportError": error,
+        },
+        "cache": {},
+        "timings": {
+            "send": 0,
+            "wait": round(float(r.get("ttfb_ms") or 0.0), 2),
+            "receive": round(max(total_ms - float(r.get("ttfb_ms") or 0.0), 0.0), 2),
+            "comment": "wait = ttfb_ms, receive = remainder of total_ms",
+        },
+    }
+
+
+def _body_ext(content_type: str) -> str:
+    """Pick a sensible file extension for a stored body download."""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    return {
+        "application/json": "json",
+        "text/html": "html",
+        "text/xml": "xml",
+        "application/xml": "xml",
+        "text/plain": "txt",
+        "application/x-www-form-urlencoded": "txt",
+        "application/pdf": "pdf",
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/gif": "gif",
+        "image/svg+xml": "svg",
+        "text/css": "css",
+        "application/javascript": "js",
+        "text/javascript": "js",
+    }.get(ct, "bin")
+
+
+def _export_filters() -> dict:
+    """Read export filters from the query string (mirrors the Live-tab filters).
+
+    method/status/url are applied server-side (SQL) so exporting a huge DB
+    stays bounded; limit caps the result either way.
+    """
+    args = flask_request.args
+    limit = min(max(args.get("limit", 1000, type=int), 1), 10_000)
+    since = max(args.get("since", 0, type=int), 0)
+    return {
+        "limit": limit,
+        "since": since,
+        "method": args.get("method", "").strip(),
+        "status": args.get("status", "").strip(),
+        "url": args.get("url", "").strip(),
+    }
 
 
 # ── Entry point ────────────────────────────────────────────────────────

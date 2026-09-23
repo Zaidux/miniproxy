@@ -49,13 +49,19 @@ def main(argv: list[str] | None = None) -> int:
     p_start.add_argument("--mitmdump", default="mitmdump")
     p_start.add_argument("--dashboard-port", type=int, default=5000,
                          help="Port for the web dashboard (default 5000)")
+    p_start.add_argument("--dashboard-host", default="127.0.0.1",
+                         help="Bind address for the web dashboard "
+                              "(default 127.0.0.1; pass 0.0.0.0 explicitly for LAN access)")
+    p_start.add_argument("--dashboard-token", default=None,
+                         help="Require this token for the dashboard's mutating "
+                              "endpoints (recommended with --dashboard-host 0.0.0.0)")
     p_start.add_argument("--no-dashboard", action="store_true",
                          help="Do not launch the web dashboard")
 
     sub.add_parser("web", help="Start the proxy AND the web dashboard (alias of start)")
     p_web = sub.add_parser("web")
-    for opt in ("--port", "--db", "--scope", "--mitmdump",
-                "--dashboard-port", "--no-dashboard"):
+    for opt in ("--port", "--db", "--scope", "--mitmdump", "--dashboard-port",
+                "--dashboard-host", "--dashboard-token", "--no-dashboard"):
         p_web.add_argument(opt, **_same_option(p_start, opt))
     p_web.add_argument("--block-out-of-scope", action="store_true")
 
@@ -65,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     p_dash = sub.add_parser("dashboard", help="Run the Flask dashboard")
     p_dash.add_argument("--port", type=int, default=5000)
     p_dash.add_argument("--host", default="127.0.0.1")
+    p_dash.add_argument("--token", default=None,
+                        help="Require a token on mutating endpoints")
 
     p_tui = sub.add_parser("tui", help="Run the terminal UI (Textual)")
     p_tui.add_argument("--db", default=None, help="SQLite capture DB path")
@@ -85,13 +93,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command in ("start", "web"):
         from miniproxy import server
+        dash_host = getattr(args, "dashboard_host", None) or "127.0.0.1"
         result = server.start(
             port=args.port, db_path=args.db, scope_hosts=args.scope,
             out_of_scope="block" if args.block_out_of_scope else "skip",
             mitmdump_path=args.mitmdump,
             dashboard=not args.no_dashboard,
             dash_port=args.dashboard_port,
+            dash_host=dash_host,
+            dash_token=args.dashboard_token,
         )
+        if dash_host not in ("127.0.0.1", "localhost"):
+            print("⚠  Dashboard is LAN-exposed: captures contain tokens, cookies "
+                  "and session data. Pass --dashboard-token to require auth.")
         print(result["message"])
         if result.get("dashboard"):
             print(f"Web UI: {result['dashboard']['url']}  (mirrors `miniproxy tui`)")
@@ -116,8 +130,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["status"] == "running" else 1
 
     if args.command == "dashboard":
-        from miniproxy.app import app
-        app.run(host=args.host, port=args.port, debug=False)
+        import miniproxy.app as appmod
+        if args.token:
+            os.environ["MINIPROXY_DASHBOARD_TOKEN"] = args.token
+            appmod.DASHBOARD_TOKEN = args.token
+        if args.host not in ("127.0.0.1", "localhost"):
+            print("⚠  Dashboard is LAN-exposed: captures contain tokens, cookies "
+                  "and session data. Pass --token to require auth.")
+        appmod.app.run(host=args.host, port=args.port, debug=False)
         return 0
 
     if args.command == "tui":

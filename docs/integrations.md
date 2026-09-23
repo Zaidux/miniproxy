@@ -79,7 +79,9 @@ store to read HTTPS bodies.
 2. Phone Wi-Fi → manual proxy → your computer's IP, port 8080.
 3. Phone browser → `http://mitm.it` → install the CA for Android/iOS.
 
-Watch everything from the Web UI (`http://<your-ip>:5000`) on your desktop.
+Watch everything from the Web UI on your desktop. To open the dashboard to
+the phone too: `miniproxy start --dashboard-host 0.0.0.0 --dashboard-token s3cret`
+(the token gates state-changing actions; the UI prompts for it once).
 
 ## Chaining with other proxies
 

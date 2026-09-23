@@ -14,6 +14,7 @@ you can start the proxy once and inspect traffic from any interface.
 | [Web UI](web-ui.md) | The browser dashboard that mirrors the TUI |
 | [Integrations](integrations.md) | curl, pip, Node, Python, Git, Docker, mobile devices, Burp/other proxies |
 | [Troubleshooting](troubleshooting.md) | Common errors and fixes, FAQ |
+| [Code audit](AUDIT.md) | Engineering review: fixed bugs, limitations, roadmap |
 
 ## The 30-second tour
 

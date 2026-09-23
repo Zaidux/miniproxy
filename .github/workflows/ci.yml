@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Compile check (all modules)
+        run: python -m compileall -q src/miniproxy
+
+      - name: Run test suite
+        env:
+          # keep tests away from any real ~/.miniproxy state
+          HOME: ${{ runner.temp }}/miniproxy-home
+        run: pytest -v
+
+  frontend-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: JS syntax check on the dashboard script block
+        run: |
+          sed -n '/<script>/,/<\/script>/p' src/miniproxy/templates/index.html | sed '1d;$d' > /tmp/spa.js
+          node --check /tmp/spa.js

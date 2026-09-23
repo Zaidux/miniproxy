@@ -36,7 +36,7 @@ miniproxy stop                           # stop proxy + dashboard
 
 Then point your browser/system at `http://127.0.0.1:8080` (HTTPS interception uses mitmproxy's CA — run `mitmdump` once and install `~/.mitmproxy/mitmproxy-ca-cert.pem` if you haven't). Capture is always on while the proxy runs; the web UI and TUI are just windows onto the same capture DB.
 
-📚 **Full documentation in [`docs/`](docs/index.md)** — [setup](docs/setup.md) · [CLI & TUI](docs/cli-and-tui.md) · [web UI](docs/web-ui.md) · [integrations](docs/integrations.md) · [troubleshooting](docs/troubleshooting.md).
+📚 **Full documentation in [`docs/`](docs/index.md)** — [setup](docs/setup.md) · [CLI & TUI](docs/cli-and-tui.md) · [web UI](docs/web-ui.md) · [integrations](docs/integrations.md) · [troubleshooting](docs/troubleshooting.md) · [code audit](docs/AUDIT.md).
 
 ```bash
 miniproxy log                  # recent captured requests (with timing; reads the DB directly)
@@ -116,6 +116,20 @@ src/miniproxy/
                         #   dashboard/tui/send/log — log, send, and the TUI
                         #   work without any dashboard running)
 ```
+
+## Development
+
+```bash
+git clone https://github.com/Zaidux/miniproxy && cd miniproxy
+pip install -e ".[dev]"
+pytest                     # 62 tests: db, API, exports, intruder, process mgr, TUI
+```
+
+CI runs the suite on Linux/macOS (Python 3.10/3.12) for every push and PR,
+plus a JS syntax check on the dashboard. The web dashboard binds `127.0.0.1`
+by default; LAN exposure is opt-in via `--dashboard-host 0.0.0.0` (pair it
+with `--dashboard-token` for auth on state-changing endpoints) — see
+[docs/web-ui.md](docs/web-ui.md).
 
 ## License
 

@@ -34,7 +34,13 @@ class Intruder:
     @staticmethod
     def replace_placeholders(text: str, payload: str) -> str:
         """Replace every §...§ in text with the given payload."""
-        return re.sub(r"§[^§]+§", payload, text)
+        # Strip CR/LF from payloads so a wordlist entry can never break the
+        # request out of its header / URL / body boundaries (HTTP request
+        # smuggling primitives live exactly in this mistake). Escape any
+        # backslashes so re.sub never interprets them as group references.
+        safe = str(payload).replace("\r", "").replace("\n", "")
+        safe = safe.replace("\\", "\\\\")
+        return re.sub(r"§[^§]+§", safe, text)
 
     def run_attack(
         self,

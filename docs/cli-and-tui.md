@@ -22,6 +22,9 @@ miniproxy send       One-shot request (Repeater semantics) without the dashboard
 miniproxy start                          # proxy :8080 + web UI :5000
 miniproxy start --port 8888              # custom proxy port
 miniproxy start --dashboard-port 8081    # custom web UI port
+miniproxy start --dashboard-host 0.0.0.0 # LAN access (default is 127.0.0.1)
+miniproxy start --dashboard-host 0.0.0.0 --dashboard-token s3cret
+                                         # LAN access + token-gated mutations
 miniproxy start --no-dashboard           # proxy only, no web UI
 miniproxy start --db /tmp/lab.db         # separate capture DB
 miniproxy start --scope '*.target.com'   # capture only in-scope hosts
@@ -35,6 +38,10 @@ Output:
 MiniProxy started on :8080 (PID 12345, db=/home/you/.miniproxy/proxy.db)
 Web UI: http://127.0.0.1:5000  (mirrors `miniproxy tui`)
 ```
+
+The dashboard listens on `127.0.0.1` by default. Binding it to a LAN
+address prints a warning; pair it with `--dashboard-token` to require a
+token on state-changing endpoints (see [web UI](web-ui.md#getting-the-url)).
 
 Both processes survive your terminal (they run in their own session).
 `miniproxy stop` takes them down.
@@ -71,6 +78,7 @@ Layout:
 | `i` | show **Intruder** results for the selected request |
 | `c` | copy the request as a **curl** command |
 | `y` | copy the **response body** |
+| `e` | **save the response body** to a timestamped file in the current directory |
 | `p` | **start/stop the proxy** (blocks ≤ 8s; runs off-thread) |
 | `f` | focus the URL filter |
 | `t` / `s` | focus method / status filter |

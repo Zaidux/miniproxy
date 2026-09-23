@@ -22,10 +22,19 @@ miniproxy web               # (re)start proxy + dashboard, print URL
 miniproxy start --dashboard-port 8081   # custom port
 ```
 
-The dashboard binds `0.0.0.0`, so it's reachable from other machines on
-your network (e.g. `http://<your-ip>:5000`) — see
-[Integrations → mobile devices](integrations.md#mobile-devices). It's a
-read/inspect tool on your LAN; don't expose it to the internet.
+The dashboard binds `127.0.0.1` only — it is not reachable from other
+machines. To open it to your network (e.g. to drive it from a phone, see
+[Integrations → mobile devices](integrations.md#mobile-devices)) you must
+opt in explicitly, and should set a token:
+
+```bash
+miniproxy start --dashboard-host 0.0.0.0 --dashboard-token s3cret
+```
+
+With a token set, every state-changing action (proxy toggle, Repeater send,
+Intruder attack, clear/export mutations) requires it — the UI will prompt
+you once per session. Read-only endpoints (log listing, detail, exports)
+remain open. Never expose the dashboard to the internet.
 
 Already running a proxy without the dashboard? Start it alone:
 
@@ -53,13 +62,19 @@ Refreshes every 2s. Filters on top:
 | Status | 2xx / 3xx / 4xx / 5xx / Errors (code 0 = transport error) / Pending (no response yet) |
 | URL substring | case-insensitive, anywhere in the URL |
 
+Filters are applied **server-side** (SQL), so huge capture DBs stay fast —
+and the same filters carry into exports via the query string. The
+**Export ▾** menu offers HAR 1.2, MiniProxy JSON, a SQLite snapshot, the
+selected response body, and **Clear all captures…** (confirm-guarded).
+
 Click a row to select it. Selection survives refreshes.
 
 **Right — detail tabs.**
 
 - **Request** — request line + headers, then the body
 - **Response** — headers and body; pending rows say so, transport errors
-  show the underlying reason
+  show the underlying reason. Bodies stored truncated (default cap 100 KB)
+  carry a "⚠ truncated" notice with the original size.
 - **Intruder** — fuzzing results recorded for this request
 
 Action buttons under the tabs:

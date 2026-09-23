@@ -30,6 +30,12 @@ dependencies = [
     "textual>=0.40.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.2",
+]
+
 [project.scripts]
 miniproxy = "miniproxy.__main__:main"
 
@@ -49,3 +55,7 @@ include = [
     "bin",
     "scripts",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --timeout=60"

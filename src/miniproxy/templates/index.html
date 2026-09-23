@@ -99,6 +99,16 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
 .text-muted{color:var(--muted)}.text-sm{font-size:12px}.ml-auto{margin-left:auto}
 .empty-note{padding:24px;text-align:center;color:var(--muted)}
 .kbd{display:inline-block;padding:1px 6px;border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;background:var(--panel);font-size:11px;font-family:ui-monospace,Menlo,monospace}
+
+/* ── Export menu ────────────────────────────────────────────────── */
+.export-wrap{position:relative;margin-left:8px}
+.export-menu{display:none;position:absolute;right:0;top:calc(100% + 6px);background:var(--surface);border:1px solid var(--border);border-radius:8px;min-width:250px;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.45);overflow:hidden}
+.export-menu.open{display:block}
+.export-menu button{display:block;width:100%;text-align:left;padding:8px 14px;background:transparent;border:none;color:var(--text);font-size:13px;cursor:pointer}
+.export-menu button:hover{background:rgba(88,166,255,.12)}
+.export-menu button:disabled{opacity:.45;cursor:not-allowed}
+.export-menu hr{border:none;border-top:1px solid var(--border);margin:4px 0}
+.export-menu .danger{color:var(--red)}
 @media (max-width: 900px){.split{flex-direction:column}.detail-pane{max-width:none}}
 </style>
 </head>
@@ -117,6 +127,17 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
     <button class="tab" data-tab="log">Log</button>
     <button class="tab" data-tab="repeater">Repeater</button>
     <button class="tab" data-tab="intruder">Intruder</button>
+  </div>
+  <div class="export-wrap">
+    <button class="btn btn-sm" id="export-btn" title="Download the filtered capture set">Export ▾</button>
+    <div id="export-menu" class="export-menu">
+      <button data-x="har">HAR 1.2 (.har) — DevTools / Burp</button>
+      <button data-x="json">MiniProxy JSON (.json)</button>
+      <button data-x="db">SQLite snapshot (.db)</button>
+      <button data-x="body" id="export-body-btn" disabled>Selected response body</button>
+      <hr>
+      <button id="clear-btn" class="danger">Clear all captures…</button>
+    </div>
   </div>
 </div>
 
@@ -184,6 +205,7 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
           <button class="btn btn-sm btn-primary" id="d-open-rep">Repeater</button>
           <button class="btn btn-sm" id="d-curl">Copy curl</button>
           <button class="btn btn-sm" id="d-body">Copy body</button>
+          <button class="btn btn-sm" id="d-save-body" title="Download the stored response body to disk">Save body…</button>
         </div>
       </div>
     </div>
@@ -322,10 +344,16 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
 <script>
 "use strict";
 // ── helpers ──────────────────────────────────────────────────────────
-async function api(url, opts) {
-  const r = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opts });
+async function api(url, opts = {}) {
+  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  if (state.token) headers["X-MiniProxy-Token"] = state.token;
+  const r = await fetch(url, { ...opts, headers });
   let data = null;
   try { data = await r.json(); } catch (e) { data = { error: "bad response" }; }
+  if (r.status === 401 && data.error && String(data.error).indexOf("token") !== -1) {
+    const t = window.prompt("This dashboard requires a token (set via --dashboard-token / MINIPROXY_DASHBOARD_TOKEN):");
+    if (t) { state.token = t; return api(url, opts); }
+  }
   return { ok: r.ok, status: r.status, data };
 }
 function esc(s) { if (s == null) return ""; const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
@@ -415,7 +443,7 @@ document.querySelectorAll(".dtab").forEach(btn => {
 });
 
 // ── state ────────────────────────────────────────────────────────────
-const state = { rows: [], selectedId: null, logCache: [] };
+const state = { rows: [], selectedId: null, logCache: [], token: "" };
 
 // ── proxy bar ────────────────────────────────────────────────────────
 async function refreshProxyBar() {
@@ -486,6 +514,7 @@ function renderLive() {
 function selectRow(id) {
   state.selectedId = id;
   renderLive();
+  setExportMenu();
   const e = state.rows.find(x => x.id === id);
   if (e) showDetail(e);
   document.getElementById("d-int").textContent = "(loading…)";
@@ -511,11 +540,16 @@ document.getElementById("filter-url").addEventListener("input", renderLive);
 // ── detail panes ─────────────────────────────────────────────────────
 function showDetail(e) {
   const c = e.response_code;
+  const reqLen = e.request_body_len || 0, respLen = e.response_body_len || 0;
+  const reqTrunc = (e.body || "").length < reqLen ? " · <span title='body stored truncated (see docs/AUDIT.md)'>⚠ truncated to " + (e.body || "").length + "B</span>" : "";
+  const respTrunc = respLen > (e.response_body || "").length && (e.response_body || "") !== "" ? " · <span title='body stored truncated'>⚠ truncated to " + (e.response_body || "").length + "B</span>" : "";
   document.getElementById("req-meta").innerHTML =
     "<b>#" + e.id + "</b> · " + esc(e.method) + " · " +
     '<span class="status ' + scls(c) + '">' + codeLabel(c) + "</span> · " +
     "ttfb " + msLabel(e.ttfb_ms) + "ms · total " + msLabel(e.total_ms) + "ms · " +
-    esc(e.url);
+    esc(e.url) + reqTrunc + respTrunc;
+  if (reqTrunc) document.getElementById("d-req-body").textContent += "\n\n⚠ body truncated at " + (e.body || "").length + " B (original " + reqLen + " B)";
+  if (respTrunc) document.getElementById("d-resp-b").textContent += "\n\n⚠ body truncated at " + (e.response_body || "").length + " B (original " + respLen + " B)";
   document.getElementById("d-req-line").textContent =
     (e.method || "") + " " + (e.url || "") + "\n" + fmtH(e.headers);
   document.getElementById("d-req-body").textContent = e.body || "(empty body)";
@@ -693,15 +727,29 @@ document.getElementById("istart").addEventListener("click", async () => {
   const btn = document.getElementById("istart");
   btn.disabled = true; btn.textContent = "Running…";
   try {
+    // Attacks run server-side in a background thread — start them, then
+    // poll /api/intruder/status for progress instead of blocking the UI.
     const { ok, data } = await api("/api/intruder/start", {
       method: "POST",
       body: JSON.stringify({ request_id: parseInt(rid, 10), wordlist: words.slice(0, 1000) }),
     });
     if (!ok || data.error) { alert(data.error || "attack failed"); return; }
-    showRes(data.results);
-    loadIntruderPane();
-  } catch (e) { alert("Failed: " + e.message); }
-  finally { btn.disabled = false; btn.textContent = "Start attack"; }
+    document.getElementById("icnt").textContent = "0 / " + data.total + " requests";
+    const poll = setInterval(async () => {
+      try {
+        const { data: st } = await api("/api/intruder/status");
+        if (st.running) {
+          document.getElementById("icnt").textContent = st.progress + " / " + st.total + " requests";
+          return;
+        }
+        clearInterval(poll);
+        btn.disabled = false; btn.textContent = "Start attack";
+        if (st.error) { alert("Attack failed: " + st.error); return; }
+        showRes(st.results || []);
+        loadIntruderPane();
+      } catch (e) { clearInterval(poll); btn.disabled = false; btn.textContent = "Start attack"; }
+    }, 500);
+  } catch (e) { btn.disabled = false; btn.textContent = "Start attack"; alert("Failed: " + e.message); }
 });
 function showRes(rr) {
   document.getElementById("ires").style.display = "block";
@@ -720,6 +768,57 @@ function showRes(rr) {
       alert("Payload: " + r.payload + "\nStatus: " + r.response_code + "\n\nBody:\n" + (r.response_body || "(empty)").slice(0, 3000));
     }));
 }
+
+// ── export / clear ───────────────────────────────────────────────────
+const exportBtn = document.getElementById("export-btn");
+const exportMenu = document.getElementById("export-menu");
+function setExportMenu() {
+  const hasSel = state.selectedId != null && state.rows.some(x => x.id === state.selectedId);
+  const eb = document.getElementById("export-body-btn");
+  eb.disabled = !hasSel;
+  eb.textContent = hasSel ? "Selected response body (#" + state.selectedId + ")" : "Selected response body";
+}
+exportBtn.addEventListener("click", () => { setExportMenu(); exportMenu.classList.toggle("open"); });
+document.addEventListener("click", ev => {
+  if (!exportMenu.contains(ev.target) && ev.target !== exportBtn) exportMenu.classList.remove("open");
+});
+function exportFiltersQ() {
+  const m = document.getElementById("filter-method").value;
+  const s = document.getElementById("filter-status").value;
+  const u = document.getElementById("filter-url").value.trim();
+  const p = new URLSearchParams();
+  if (m) p.set("method", m);
+  if (s) p.set("status", s);
+  if (u) p.set("url", u);
+  return p.toString();
+}
+exportMenu.querySelectorAll("button[data-x]").forEach(b => b.addEventListener("click", () => {
+  exportMenu.classList.remove("open");
+  const kind = b.dataset.x;
+  if (kind === "body") { saveSelectedBody(); return; }
+  window.location.href = "/api/export/" + kind + (exportFiltersQ() ? "?" + exportFiltersQ() : "");
+  toast("Exporting " + kind.toUpperCase() + "…");
+}));
+function saveSelectedBody() {
+  if (state.selectedId == null) { toast("Select a request first", true); return; }
+  window.location.href = "/api/export/body/" + state.selectedId;
+  toast("Downloading body for #" + state.selectedId + "…");
+}
+document.getElementById("d-save-body").addEventListener("click", saveSelectedBody);
+document.getElementById("clear-btn").addEventListener("click", async () => {
+  exportMenu.classList.remove("open");
+  if (!window.confirm("Delete ALL captured requests and intruder results?\nThis cannot be undone.")) return;
+  const { ok, data } = await api("/api/clear", { method: "POST" });
+  if (!ok || data.error) { toast(data.error || "clear failed", true); return; }
+  toast("Cleared " + data.removed + " capture(s)");
+  state.rows = [];
+  state.selectedId = null;
+  setExportMenu();
+  renderLive();
+  document.getElementById("req-meta").textContent = "Select a request…";
+  ["d-req-line", "d-req-body", "d-resp-h", "d-resp-b"].forEach(id => document.getElementById(id).textContent = "");
+  document.getElementById("d-int").textContent = "(none yet — run one from the Intruder tab)";
+});
 
 // ── boot ─────────────────────────────────────────────────────────────
 pollLive();

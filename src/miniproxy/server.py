@@ -84,10 +84,17 @@ def _port_free(port: int) -> bool:
 
 def _wait_listening(port: int, proc: subprocess.Popen, timeout: float = 8.0) -> bool:
     """Poll until the proxy accepts connections (or the process dies)."""
+    return _wait_listening_on("127.0.0.1", port, proc, timeout)
+
+
+def _wait_listening_on(
+    host: str, port: int, proc: subprocess.Popen, timeout: float = 8.0,
+) -> bool:
+    """Poll until <host>:port accepts TCP connections (or the process dies)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            with socket.create_connection((host, port), timeout=0.5):
                 return True
         except OSError:
             if proc.poll() is not None:
@@ -120,6 +127,8 @@ def start(
     extra_args: Optional[list[str]] = None,
     dashboard: bool = True,
     dash_port: int = DEFAULT_DASH_PORT,
+    dash_host: str = "127.0.0.1",
+    dash_token: Optional[str] = None,
     with_dashboard: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Start the interception proxy as a background subprocess.
@@ -137,6 +146,10 @@ def start(
                        include its URL in the result. Capture is unchanged —
                        the dashboard only reads the same SQLite DB.
         dash_port:     Port for the web dashboard (default 5000).
+        dash_host:     Bind address for the dashboard (default 127.0.0.1;
+                       pass 0.0.0.0 explicitly to expose it on the LAN).
+        dash_token:    Require this token on the dashboard's mutating
+                       endpoints (recommended when LAN-exposed).
     """
     pid = _read_pid()
     if pid is not None and _process_exists(pid) and _pid_matches(pid, "mitmdump"):
@@ -148,7 +161,7 @@ def start(
             "message": f"MiniProxy is already running (PID {pid}).",
         }
         if dashboard or with_dashboard:
-            result["dashboard"] = _ensure_dashboard(db_path, dash_port)
+            result["dashboard"] = _ensure_dashboard(db_path, dash_port, dash_host, dash_token)
         return result
     if pid is not None:
         # Dead or recycled PID — clean the stale state and start fresh.
@@ -218,15 +231,22 @@ def start(
         "message": f"MiniProxy started on :{port} (PID {proc.pid}, db={db}{scope_note})",
     }
     if dashboard or with_dashboard:
-        result["dashboard"] = _ensure_dashboard(db, dash_port)
+        result["dashboard"] = _ensure_dashboard(db, dash_port, dash_host, dash_token)
     return result
 
 
-def _ensure_dashboard(db_path: Optional[str], dash_port: int) -> dict[str, Any]:
+def _ensure_dashboard(
+    db_path: Optional[str],
+    dash_port: int,
+    dash_host: str = "127.0.0.1",
+    dash_token: Optional[str] = None,
+) -> dict[str, Any]:
     """Launch the Flask dashboard as a daemon, or report the running one.
 
     Returns a dict with ``url`` so callers (CLI, TUI, tests) can point the
-    user at a browser without guessing ports.
+    user at a browser without guessing ports. The bind address defaults to
+    loopback; LAN exposure is an explicit caller choice (and should come
+    with a token).
     """
     dash_pid = _read_dash_pid()
     if dash_pid is not None and _process_exists(dash_pid) and _pid_matches(dash_pid, "miniproxy", "dashboard"):
@@ -235,8 +255,8 @@ def _ensure_dashboard(db_path: Optional[str], dash_port: int) -> dict[str, Any]:
             "status": "already_running",
             "pid": dash_pid,
             "port": port_running,
-            "url": f"http://127.0.0.1:{port_running}",
-            "message": f"Dashboard already running at http://127.0.0.1:{port_running}",
+            "url": f"http://{dash_host}:{port_running}",
+            "message": f"Dashboard already running at http://{dash_host}:{port_running}",
         }
     if dash_pid is not None:
         DASH_PID_FILE.unlink(missing_ok=True)
@@ -246,9 +266,11 @@ def _ensure_dashboard(db_path: Optional[str], dash_port: int) -> dict[str, Any]:
     env = os.environ.copy()
     if db_path:
         env["MINIPROXY_DB_PATH"] = str(db_path)
+    if dash_token:
+        env["MINIPROXY_DASHBOARD_TOKEN"] = dash_token
     cmd = [
         sys.executable, "-m", "miniproxy", "dashboard",
-        "--host", "0.0.0.0", "--port", str(dash_port),
+        "--host", dash_host, "--port", str(dash_port),
     ]
     try:
         proc = subprocess.Popen(
@@ -268,8 +290,8 @@ def _ensure_dashboard(db_path: Optional[str], dash_port: int) -> dict[str, Any]:
                     "status": "started",
                     "pid": proc.pid,
                     "port": dash_port,
-                    "url": f"http://127.0.0.1:{dash_port}",
-                    "message": f"Dashboard running at http://127.0.0.1:{dash_port}",
+                    "url": f"http://{dash_host}:{dash_port}",
+                    "message": f"Dashboard running at http://{dash_host}:{dash_port}",
                 }
         except OSError:
             if proc.poll() is not None:
