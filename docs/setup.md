@@ -12,6 +12,40 @@ pip install riciplay-miniproxy
 npm install -g riciplay-miniproxy
 ```
 
+### Modern Debian/Ubuntu (PEP 668 "externally-managed-environment")
+
+On Debian 12+, Ubuntu 23.04+, and most current cloud images, a bare
+`pip install .` (or `pip install riciplay-miniproxy`) refuses to run:
+
+```
+error: externally-managed-environment
+× This environment is externally managed …
+```
+
+That's the OS protecting its system Python. Don't reach for
+`--break-system-packages` — it downgrades shared libraries (cryptography,
+typing-extensions, rich, …) and breaks *other* tools installed on the same
+box (selenium, pydantic, semgrep, …). Use an isolated environment instead:
+
+```bash
+# Option A — pipx (cleanest for CLI tools like miniproxy)
+apt install pipx
+pipx install riciplay-miniproxy        # or: pipx install /root/projects/miniproxy
+
+# Option B — plain venv
+python3 -m venv ~/.venvs/miniproxy
+~/.venvs/miniproxy/bin/pip install riciplay-miniproxy
+# then either add ~/.venvs/miniproxy/bin to PATH, or link the entry point:
+ln -sf ~/.venvs/miniproxy/bin/miniproxy /usr/local/bin/miniproxy
+
+# Option C — user site (no venv, no sudo)
+pip install --user --break-system-packages riciplay-miniproxy   # LAST resort
+```
+
+Installing from a git checkout on the VPS: `git pull`, then re-run the
+install step above from the repo root (`pipx install .` / the venv pip
+with `.`), so the installed package matches the pulled code.
+
 The npm package is a thin launcher; the real implementation is the Python
 package `riciplay-miniproxy`. Both install the same `miniproxy` command.
 
@@ -19,6 +53,7 @@ Verify:
 
 ```bash
 miniproxy --help
+miniproxy version
 ```
 
 ## 2. Install mitmproxy (the capture engine)
@@ -122,6 +157,9 @@ pip install --upgrade riciplay-miniproxy
 # or
 npm update -g riciplay-miniproxy
 ```
+
+(PEP 668 systems: upgrade inside the same pipx/venv you installed with,
+e.g. `pipx upgrade riciplay-miniproxy`.)
 
 The capture DB format is stable; upgrades keep your history. If something
 looks wrong after an upgrade, stop any running proxy

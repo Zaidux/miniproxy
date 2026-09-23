@@ -34,6 +34,21 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
   - `miniproxy connect` — the same instructions in the terminal, with a
     scannable ANSI QR of the connect page (`--qr yes|no|auto`,
     `--host/--port` overrides).
+  - `miniproxy version` subcommand.
+
+### Fixed
+- **Every `miniproxy` invocation crashed** with
+  `argparse.ArgumentError: conflicting subparser: web` on Python 3.12+
+  (the `web` subparser was registered twice; found on a real VPS deploy —
+  the CLI parser itself had zero test coverage). `build_parser()` is now
+  a separate function covered by regression tests that assert every
+  subcommand registers exactly once and parses.
+- `miniproxy web --port N` passed the port as a *string* (`_same_option`
+  dropped `type=` when copying options from `start` to `web`).
+- Docs: PEP 668 (`externally-managed-environment`) install guidance —
+  pipx/venv instead of `--break-system-packages`, which downgrades
+  shared libraries other tools depend on (`docs/setup.md`,
+  `docs/troubleshooting.md`).
   - `w` in the TUI — a connect cheat-sheet overlay (proxy address, PAC,
     CA, curl one-liners).
   - Host detection shared by dashboard/CLI/TUI (`miniproxy.connect`):

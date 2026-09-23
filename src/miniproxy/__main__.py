@@ -14,6 +14,7 @@ Subcommands:
   tui        Run the terminal UI (Textual) — live feed, details, repeater
   send       Send a request through the dashboard's Repeater
   log        Show captured requests
+  version    Print the MiniProxy version
 """
 from __future__ import annotations
 
@@ -23,17 +24,42 @@ import sys
 
 
 def _same_option(p: argparse.ArgumentParser, flag: str) -> dict:
-    """Copy an option's kwargs from one subparser to build it on another."""
+    """Copy an option's kwargs from one subparser to build it on another.
+
+    ``type`` must come along too — without it ``miniproxy web --port 9999"
+    parsed the port as a *string*, which server.start() then wrote to the
+    port file verbatim.
+    """
     for action in p._actions:
         if flag in action.option_strings:
-            kwargs = {"default": action.default, "help": action.help}
+            kwargs = {
+                "default": action.default,
+                "help": action.help,
+                "type": action.type,
+            }
             if action.__class__.__name__ == "_StoreTrueAction":
-                kwargs["action"] = "store_true"
+                kwargs = {"action": "store_true", "help": action.help}
             return kwargs
     return {"default": None}
 
 
-def main(argv: list[str] | None = None) -> int:
+def _version() -> str:
+    try:
+        from importlib.metadata import version as _v
+
+        return _v("riciplay-miniproxy")
+    except Exception:
+        return "unknown"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Construct the full CLI parser.
+
+    Kept separate from main() so a parser-construction bug (e.g. a
+    duplicated subparser, which used to crash *every* invocation with
+    ``conflicting subparser: web``) is caught by tests instead of only
+    showing up on a user's machine.
+    """
     parser = argparse.ArgumentParser(
         prog="miniproxy",
         description="HTTP/S interception proxy for security research.",
@@ -60,8 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     p_start.add_argument("--no-dashboard", action="store_true",
                          help="Do not launch the web dashboard")
 
-    sub.add_parser("web", help="Start the proxy AND the web dashboard (alias of start)")
-    p_web = sub.add_parser("web")
+    p_web = sub.add_parser("web", help="Start the proxy AND the web dashboard (alias of start)")
     for opt in ("--port", "--db", "--scope", "--mitmdump", "--dashboard-port",
                 "--dashboard-host", "--dashboard-token", "--no-dashboard"):
         p_web.add_argument(opt, **_same_option(p_start, opt))
@@ -105,7 +130,18 @@ def main(argv: list[str] | None = None) -> int:
     p_log.add_argument("--id", type=int, default=None)
     p_log.add_argument("--limit", type=int, default=30)
 
+    sub.add_parser("version", help="Print the MiniProxy version")
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "version":
+        print(_version())
+        return 0
 
     if args.command in ("start", "web"):
         from miniproxy import server

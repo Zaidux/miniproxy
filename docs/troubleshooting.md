@@ -4,6 +4,26 @@ Quick diagnosis order: `miniproxy status` → is the proxy in the list? →
 check the Web UI header (proxy dot) → send a test request
 (`curl -x http://127.0.0.1:8080 http://example.com`) → check the Live tab.
 
+## `conflicting subparser: web` / any `miniproxy` command crashes with an argparse traceback
+
+You're on a release older than the fix, or the installed package and the
+repo checkout are out of sync. Upgrade the installed package (and make
+sure `pip install .` was re-run after `git pull`):
+
+```bash
+pip install --upgrade riciplay-miniproxy   # or pipx upgrade / venv pip
+miniproxy --help
+```
+
+If you installed from source, re-install from source after every pull.
+
+## "externally-managed-environment" when installing on a VPS
+
+PEP 668 — Debian/Ubuntu protect the system Python. Use pipx or a venv
+(instead of `--break-system-packages`, which downgrades shared libraries
+other tools depend on) — see
+[Setup → Install](setup.md#1-install).
+
 ## "mitmdump not found" / proxy won't start
 
 The capture engine is missing.
@@ -134,6 +154,10 @@ miniproxy start
 
 **Does the web UI affect capture?**
 No — it only reads the DB. Opening 10 tabs changes nothing on the wire.
+
+**`miniproxy version` says "unknown"?**
+The dist metadata didn't install (e.g. running from a source checkout
+without `pip install -e .`). It's cosmetic — every other command works.
 
 **Do I need the dashboard running to use the TUI (or vice versa)?**
 No. Any number of readers can be open at once; they'd all show the same
