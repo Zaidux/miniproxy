@@ -241,17 +241,20 @@ def connect_verify():
 
 @app.route("/api/connect/pair", methods=["GET", "POST"])
 def connect_pair():
-    """Record/confirm that a device completed the connect steps.
+    """Pair the device that made this request (legacy single-device view).
 
-    GET returns the last pair event; POST records one (name optional).
-    Stored in the capture DB's config table — survives restarts, is capped
-    and sanitized, and is visible in both UIs' client lists.
+    POST registers the caller in the persistent device registry (name,
+    source IP, user agent) and records the last pair event. GET returns
+    the last pair event only. Prefer /api/connect/devices for the full
+    registry.
     """
     if flask_request.method == "POST":
         data = flask_request.get_json(silent=True) or {}
         name = str(data.get("name") or "device").strip()
         # Keep it a safe short label (it is shown in dashboards/TUIs).
         name = "".join(c for c in name if c.isalnum() or c in " ._-")[:40] or "device"
+        db.register_device(name, _client_ip(),
+                           flask_request.headers.get("User-Agent", "")[:200])
         db.set_config("last_pair", name)
         db.set_config("last_pair_at", _utcnow_iso())
         return jsonify({"paired": True, "name": name})
@@ -259,6 +262,44 @@ def connect_pair():
     if not name:
         return jsonify({"paired": False})
     return jsonify({"paired": True, "name": name, "at": db.get_config("last_pair_at")})
+
+
+@app.route("/api/connect/devices", methods=["GET", "POST"])
+def connect_devices():
+    """Persistent registry of connected devices.
+
+    GET lists saved devices (most recently active first). POST saves one:
+    the caller's own IP/User-Agent are recorded automatically — a device
+    always pairs as itself — with the JSON body supplying the name.
+    Pairing the same name from the same IP again refreshes last_seen
+    instead of duplicating.
+    """
+    if flask_request.method == "POST":
+        data = flask_request.get_json(silent=True) or {}
+        name = str(data.get("name") or "device").strip()
+        name = "".join(c for c in name if c.isalnum() or c in " ._-")[:40] or "device"
+        device_id = db.register_device(
+            name, _client_ip(),
+            flask_request.headers.get("User-Agent", "")[:200],
+        )
+        return jsonify({"saved": True, "id": device_id, "name": name}), 201
+    return jsonify({"devices": db.get_devices(),
+                    "your_ip": _client_ip()})
+
+
+@app.route("/api/connect/devices/<int:device_id>", methods=["DELETE"])
+def connect_device_delete(device_id):
+    """Forget one saved device."""
+    if not db.remove_device(device_id):
+        return jsonify({"error": "no such device"}), 404
+    return jsonify({"removed": True, "id": device_id})
+
+
+def _client_ip() -> str:
+    """The remote address that actually reached us (X-Forwarded-For is
+    trivially spoofable and the registry is informational — keep the
+    socket truth)."""
+    return (flask_request.remote_addr or "").strip()[:45]
 
 
 def _utcnow_iso() -> str:

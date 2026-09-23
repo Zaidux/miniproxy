@@ -380,13 +380,15 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
           <span id="c-verify-out" class="verify-out"></span>
         </div>
         <div class="field" style="margin-top:8px">
-          <label>Name this device (pairing note)</label>
+          <label>Name this device (saved to the device registry)</label>
           <div class="urlbox">
-            <input id="c-pair-name" placeholder="e.g. iphone-safari">
-            <button class="btn btn-sm" id="c-pair">Pair</button>
+            <input id="c-pair-name" placeholder="e.g. pixel-chrome">
+            <button class="btn btn-sm" id="c-pair">Save device</button>
           </div>
           <div class="verify-out" id="c-pair-out"></div>
         </div>
+        <div class="card-header" style="border-bottom:none;padding:8px 0 4px">Saved devices <span id="c-dev-count" class="text-muted"></span></div>
+        <div id="c-dev-list" class="hosts"><span class="hint">loading…</span></div>
       </div>
     </div>
     <div class="card">
@@ -987,10 +989,38 @@ document.getElementById("c-verify").addEventListener("click", async function () 
 document.getElementById("c-pair").addEventListener("click", async function () {
   const out = document.getElementById("c-pair-out");
   const name = document.getElementById("c-pair-name").value.trim() || "device";
-  const { data } = await api("/api/connect/pair", { method: "POST", body: JSON.stringify({ name }) });
-  if (data && data.paired) out.innerHTML = '<span class="ok">✔ paired:</span> ' + esc(data.name);
-  else out.innerHTML = '<span class="bad">✘ pairing failed</span>';
+  const { data } = await api("/api/connect/devices", { method: "POST", body: JSON.stringify({ name }) });
+  if (data && data.saved) {
+    out.innerHTML = '<span class="ok">✔ saved:</span> ' + esc(data.name);
+    document.getElementById("c-pair-name").value = "";
+    loadDevicesDash();
+  } else out.innerHTML = '<span class="bad">✘ saving failed</span>';
 });
+
+// saved-device registry (shared with the /connect page)
+function whenSeen(iso) { return iso ? String(iso).slice(0, 19).replace("T", " ") : ""; }
+async function loadDevicesDash() {
+  const list = document.getElementById("c-dev-list");
+  try {
+    const { data } = await api("/api/connect/devices");
+    const devs = (data && data.devices) || [];
+    document.getElementById("c-dev-count").textContent = devs.length ? "(" + devs.length + ")" : "";
+    if (!devs.length) { list.innerHTML = '<div class="hlabel">No devices saved yet.</div>'; return; }
+    list.innerHTML = devs.map(v =>
+      '<div class="hrow"><span class="haddr">' + esc(v.name) + '</span>' +
+      '<span class="hlabel">' + esc(v.ip || "unknown ip") + (v.last_seen ? " · " + esc(whenSeen(v.last_seen)) : "") + '</span>' +
+      '<button class="btn btn-sm" data-ddel="' + v.id + '">Forget</button></div>'
+    ).join("");
+    list.querySelectorAll("[data-ddel]").forEach(b => b.addEventListener("click", async () => {
+      b.disabled = true;
+      const { ok, data: dd } = await api("/api/connect/devices/" + b.getAttribute("data-ddel"), { method: "DELETE" });
+      if (!ok) { toast((dd && dd.error) || "delete failed", true); b.disabled = false; return; }
+      toast("Device forgotten");
+      loadDevicesDash();
+    }));
+  } catch (e) { list.innerHTML = '<div class="hlabel">Could not load devices.</div>'; }
+}
+loadDevicesDash();
 
 // ── boot ─────────────────────────────────────────────────────────────
 pollLive();

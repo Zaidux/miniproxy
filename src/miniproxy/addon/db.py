@@ -95,6 +95,19 @@ class Database:
                 key   TEXT PRIMARY KEY,
                 value TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS devices (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL,
+                ip         TEXT,
+                user_agent TEXT,
+                first_seen TEXT NOT NULL,
+                last_seen  TEXT NOT NULL,
+                note       TEXT
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_identity
+                ON devices (name, ip);
         """)
         # Deployed session DBs predate the timing columns — migrate in place.
         # Only duplicate-column errors are ignorable: swallowing everything
@@ -453,6 +466,73 @@ class Database:
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+    # ── Connected devices ──────────────────────────────────────────
+
+    def register_device(
+        self,
+        name: str,
+        ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> int:
+        """Save a connected device, upserting on (name, ip).
+
+        Pairing the same device twice (e.g. a phone revisiting the wizard
+        from the same address) refreshes ``last_seen`` instead of stacking
+        duplicate rows; the same name from a *different* IP is a separate
+        entry (that is genuinely a different device/position). A missing IP
+        is normalized to ``""`` — SQLite treats NULLs as distinct in unique
+        indexes, so NULL IPs would never upsert.
+        """
+        ip = (ip or "").strip()[:45]
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
+        try:
+            cur = conn.execute(
+                "INSERT INTO devices (name, ip, user_agent, first_seen, last_seen) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(name, ip) DO UPDATE SET "
+                "user_agent=excluded.user_agent, last_seen=excluded.last_seen",
+                (name, ip, user_agent, now, now),
+            )
+            # On the DO UPDATE path SQLite does not refresh lastrowid, so
+            # fetch the row's real id explicitly.
+            row: tuple | None = conn.execute(
+                "SELECT id FROM devices WHERE name=? AND ip=?",
+                (name, ip),
+            ).fetchone()
+            conn.commit()
+        finally:
+            conn.close()
+        if row is None:  # pragma: no cover - upsert guarantees a row
+            raise RuntimeError("register_device: device row vanished after upsert")
+        return int(row[0])
+
+    def get_devices(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Saved devices, most recently active first."""
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT * FROM devices ORDER BY last_seen DESC LIMIT ?",
+            (max(int(limit), 1),),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def remove_device(self, device_id: int) -> bool:
+        """Forget one device; True if a row was deleted."""
+        conn = self._connect()
+        cur = conn.execute("DELETE FROM devices WHERE id=?", (int(device_id),))
+        conn.commit()
+        conn.close()
+        return bool(cur.rowcount)
+
+    def clear_devices(self) -> int:
+        """Forget every saved device; returns rows removed."""
+        conn = self._connect()
+        cur = conn.execute("DELETE FROM devices")
+        conn.commit()
+        conn.close()
+        return max(cur.rowcount, 0)
 
     # ── Maintenance / export helpers ───────────────────────────────────
 

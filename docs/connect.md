@@ -114,6 +114,109 @@ More per-tool recipes (git, npm, Docker, Python `requests`) live in
 3. Follow the on-page steps: tap the PAC URL or download the CA, set the
    proxy, browse.
 
+## Connecting an Android browser (Chrome or Firefox) — incl. from a VPS
+
+Android has no global proxy setting; the proxy is configured **per Wi-Fi
+network** (mobile data cannot be pointed at a proxy without a VPN app).
+Both Chrome and Firefox for Android follow that network proxy. Full
+end-to-end walkthrough for the "MiniProxy runs on my VPS" case:
+
+### 0 · On the VPS — start MiniProxy and open the firewall
+
+```bash
+miniproxy start --dashboard-host 0.0.0.0 --dashboard-token <random-string>
+```
+
+Then open **both** ports in the VPS provider's firewall/security group (not
+just the OS one — this is the single most common reason a phone can't
+connect):
+
+- **8080/tcp** — the proxy itself (this is what your browser talks to)
+- **5000/tcp** — the dashboard, so the phone can open `/connect`, download
+  the CA, and pair (firewall it off again after setup if you prefer; only
+  the proxy port is needed day-to-day)
+
+Verify from the phone's browser first: `http://<vps-ip>:5000/connect` must
+load. If it doesn't, it's the firewall — fix that before touching proxy
+settings. From here on, the wizard on the phone shows the right addresses.
+
+### 1 · Save the device
+
+On the phone, open the connect page and tap **Save device** with a name like
+`pixel-chrome`. It lands in the device registry (name, IP, browser, last
+seen) and stays there across restarts — see [Saved
+devices](#saved-devices).
+
+### 2 · Point the Android browser at the proxy
+
+**Chrome (and every browser that follows the system proxy):**
+
+1. Settings → Network & Internet → (or long-press your Wi-Fi name →
+   **Modify**) → **Advanced**.
+2. **Proxy** → **Manual**.
+3. Host: `<vps-ip>` · Port: `8080` · Bypass for: leave empty.
+4. Save. Chrome now routes through MiniProxy (no restart needed).
+
+> Some Android builds hide the per-network proxy behind "Modify network →
+> Advanced"; Samsung calls it "Advanced → Proxy settings". If your keyboard
+> is open when saving, the Save button can hide behind it — press Back
+> first.
+
+**Firefox for Android:** it follows the same system/Wi-Fi proxy by default,
+but you can also force it in-app:
+
+1. Open Firefox → type `about:config` in the address bar (Debug menu on
+   older versions: Settings → scroll to the bottom).
+2. Search for `proxy`.
+3. Set **`network.proxy.type`** → `1` (manual).
+4. Set `network.proxy.http` → `<vps-ip>`, `network.proxy.http_port` →
+   `8080` (integer), and the same for `network.proxy.ssl` /
+   `network.proxy.ssl_port` — Firefox uses the *ssl* entries for HTTPS
+   sites.
+5. Restart Firefox.
+
+> The in-app route also covers **Firefox over mobile data**, where the
+> Wi-Fi proxy panel can't help. (It may require Firefox's beta/nightly
+> builds on some versions; the Wi-Fi proxy route works for every browser.)
+
+**PAC instead of manual:** Wi-Fi proxy settings also accept
+"Proxy Auto-Config" on most builds — paste the PAC URL from the connect
+page there.
+
+### 3 · Trust the CA on Android (HTTPS bodies)
+
+1. Download: connect page → **Download CA** (or `http://<vps-ip>:5000/ca.crt`).
+2. Settings → Security → **More security settings** → **Encryption &
+   credentials** → **Install a certificate** → **CA certificate**
+   (wording varies by vendor: "Install from storage" on older builds).
+3. Android warns that your traffic can be monitored — that's exactly the
+   point of an interception proxy; proceed only on a device you own.
+4. Restart the browser. Chrome honors user CAs immediately; Firefox asks
+   once whether to trust certificates from your installed CA — say yes.
+
+Without this step HTTPS still flows and is captured (method, URL, status,
+timing) but bodies stay encrypted. Note that on Android **7+** most *apps*
+ignore user-installed CAs — **browsers honor them**, which is why this
+workflow targets Chrome/Firefox browsing rather than arbitrary apps.
+
+### 4 · Verify
+
+Browse any site on the phone, then check the dashboard's **Live** tab (or
+`miniproxy log` on the VPS). The connect page's **Send one proxied test
+request** button also proves the path works. When you're done on public
+networks, remove the Wi-Fi proxy (set it back to "None") — Android keeps
+proxy settings per network, and a dead proxy makes every browser look
+offline.
+
+### Phone on mobile data, or no firewall access?
+
+- **Mobile data** can't use a Wi-Fi proxy. Options: tether the phone to a
+  network whose gateway is the proxy, use Firefox's in-app proxy (above),
+  or run a VPN app (e.g. an app that proxies via an HTTP proxy over VPN).
+- **Can't open ports?** Use the SSH-tunnel pattern from
+  [Pattern A](#pattern-a--ssh-tunnel-recommended-nothing-is-exposed) —
+  run the tunnel on a laptop or an Android SSH client and point the Wi-Fi
+  proxy at `127.0.0.1` on that device.
 ## HTTPS bodies: trust the CA
 
 Without the CA, HTTPS traffic still **routes and is captured** (method, URL,
@@ -179,6 +282,21 @@ direct reachability (e.g. a phone without an SSH client).
 For *HTTPS* you additionally need the CA (above). Without it, remote HTTPS
 still shows up with method/URL/status — only bodies stay opaque.
 
+## Saved devices
+
+Every device you **Save** on the connect page (or in the dashboard's Connect
+tab) is stored in the capture DB's `devices` table — name, IP, browser user
+agent, first/last seen — and survives restarts. Pairing the same name from
+the same IP again just refreshes its last-seen time. Manage the registry
+from either UI:
+
+- **Connect page** (`/connect`, step 4) — save, list, forget one, forget all
+- **Dashboard Connect tab** — the same list with inline Forget buttons
+- API: `GET/POST /api/connect/devices`, `DELETE /api/connect/devices/<id>`
+
+This is an inventory aid, not an access-control list: any client that can
+reach the proxy can use it. The registry only remembers what paired.
+
 ## Exposing the dashboard
 
 The dashboard is the read/write window (Repeater, Intruder, clear) and binds
@@ -216,6 +334,8 @@ firewall rule; captures contain cookies, tokens, and session data.
 | Traffic from *this* machine doesn't appear | The proxy env vars/PAC may bypass localhost by design — that's intended so the dashboard doesn't capture itself. |
 | Remote device can't reach the proxy | The proxy binds all interfaces, but cloud VPSes need the ports opened in the *cloud firewall/security group*, not just the OS one. |
 | Everything captured except one app | Some apps pin certificates or ignore system proxies. Route them via an explicit proxy setting if available, or capture at the OS level. |
+| Android: browser says offline after leaving the VPS | The Wi-Fi still has the proxy configured. Set it back to **None** (or the phone keeps trying a dead proxy). |
+| Android: proxy option missing on mobile data | Android only supports proxies on Wi-Fi networks; use Firefox's in-app proxy or a VPN-based route on mobile data. |
 
 ## Quick reference
 
@@ -223,6 +343,7 @@ firewall rule; captures contain cookies, tokens, and session data.
 |---|---|
 | `/connect` | Full connect wizard (any browser) |
 | `/api/connect/info` | Machine-readable connect info |
+| `/api/connect/devices` | Saved-device registry (GET list / POST save) |
 | `/proxy.pac` | PAC file for automatic proxy configuration |
 | `/ca.crt` | mitmproxy CA download |
 | `/connect/qr.svg` | QR code of the connect page |

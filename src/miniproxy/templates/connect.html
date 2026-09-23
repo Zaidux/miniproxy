@@ -49,6 +49,12 @@ details .detail-body pre{margin:6px 0}
 #pair-status{font-size:12.5px;color:var(--muted)}
 .verify-out{font-size:12.5px;margin-top:8px;min-height:18px}
 .ok{color:var(--green)}.bad{color:var(--red)}
+.dev-list{display:flex;flex-direction:column;gap:6px}
+.dev-row{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:7px 12px;font-size:12.5px}
+.dev-row .dname{font-weight:700;color:var(--text)}
+.dev-row .dmeta{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dev-row button{flex:none}
+.dev-empty{color:var(--muted);font-size:12.5px}
 .footer-note{color:var(--muted);font-size:12px;margin-top:24px;text-align:center}
 a{color:var(--accent)}
 </style>
@@ -158,19 +164,22 @@ a{color:var(--accent)}
 
   <!-- Step 4: verify -->
   <div class="card">
-    <div class="card-header"><span class="step-no">4</span> Verify &amp; pair the device</div>
+    <div class="card-header"><span class="step-no">4</span> Verify &amp; save this device</div>
     <div class="card-body">
       <button class="btn btn-success" id="verify-btn">Send one proxied test request</button>
       <div class="verify-out" id="verify-out"></div>
       <p class="hint">Generates a request from <b>this proxy host</b> through MiniProxy — if it succeeds, capture works end-to-end. After connecting your browser, browse a site and confirm the requests appear in the <b>Live</b> tab.</p>
       <div class="field" style="margin-top:14px">
-        <label>Give this device a name (marks it paired so you can spot it in the client list)</label>
+        <label>Save this device (your IP &amp; browser are recorded automatically)</label>
         <div class="urlbox">
-          <input id="pair-name" placeholder="e.g. iphone-safari, work-laptop">
-          <button class="btn" id="pair-btn">Pair device</button>
+          <input id="pair-name" placeholder="e.g. pixel-chrome, ipad-safari">
+          <button class="btn" id="pair-btn">Save device</button>
         </div>
         <div class="verify-out" id="pair-out"></div>
       </div>
+      <div class="card-header" style="border-bottom:none;padding:12px 0 6px">Saved devices <span id="dev-count" class="text-muted"></span></div>
+      <div id="dev-list" class="dev-list"><span class="hint">loading…</span></div>
+      <button class="btn btn-sm" id="dev-clear" style="margin-top:8px">Forget all devices</button>
     </div>
   </div>
 
@@ -180,6 +189,27 @@ a{color:var(--accent)}
 <script>
 "use strict";
 var state = { host: "", port: 0 };
+
+// ── optional dashboard token ────────────────────────────────────────
+// When MINIPROXY_DASHBOARD_TOKEN is set on the server, mutating endpoints
+// require it. It can arrive via ?token=… in the URL (persisted for next
+// time) or be picked up from a previous dashboard session on this origin.
+var TOKEN = new URLSearchParams(location.search).get("token") || "";
+try {
+  if (TOKEN) localStorage.setItem("mp.token", TOKEN);
+  else TOKEN = localStorage.getItem("mp.token") || "";
+} catch (e) { /* storage unavailable — token stays as-is */ }
+function apiFetch(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+  if (TOKEN) opts.headers["X-MiniProxy-Token"] = TOKEN;
+  return fetch(url, opts).then(function (r) {
+    if (r.status === 401) {
+      toast("unauthorized — reopen this page as /connect?token=<dashboard token>", true);
+    }
+    return r;
+  });
+}
 
 function esc(s) { if (s == null) return ""; var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 function toast(msg, isErr) {
@@ -255,7 +285,70 @@ async function loadInfo() {
       document.getElementById("pair-out").innerHTML = '<span class="ok">last paired device:</span> ' + esc(pj.name) + (pj.at ? " · " + esc(String(pj.at).slice(0, 19).replace("T", " ")) : "");
     }
   } catch (e) { /* pairing history is optional */ }
+  loadDevices();
 }
+
+// ── saved devices ────────────────────────────────────────────────────
+function when(iso) { return iso ? String(iso).slice(0, 19).replace("T", " ") : ""; }
+async function loadDevices() {
+  var list = document.getElementById("dev-list");
+  try {
+    var r = await apiFetch("/api/connect/devices");
+    var d = await r.json();
+    var devs = d.devices || [];
+    document.getElementById("dev-count").textContent = devs.length ? "(" + devs.length + ")" : "";
+    if (!devs.length) { list.innerHTML = '<span class="dev-empty">No devices saved yet — connect one above, then save it so you recognize it later.</span>'; return; }
+    list.innerHTML = devs.map(function (v) {
+      return '<div class="dev-row">' +
+        '<span class="dname">' + esc(v.name) + '</span>' +
+        '<span class="dmeta">' + esc(v.ip || "unknown ip") +
+        (v.last_seen ? " · last seen " + esc(when(v.last_seen)) : "") + '</span>' +
+        '<button class="btn btn-sm" data-del="' + v.id + '">Forget</button>' +
+        '</div>';
+    }).join("");
+    list.querySelectorAll("[data-del]").forEach(function (b) {
+      b.addEventListener("click", async function () {
+        b.disabled = true;
+        try {
+          var r2 = await apiFetch("/api/connect/devices/" + b.getAttribute("data-del"), { method: "DELETE" });
+          if (!r2.ok) { var e2 = await r2.json().catch(function () { return {}; }); toast(e2.error || "delete failed", true); b.disabled = false; return; }
+          toast("Device forgotten");
+          loadDevices();
+        } catch (e) { b.disabled = false; }
+      });
+    });
+  } catch (e) { list.innerHTML = '<span class="dev-empty">Could not load saved devices.</span>'; }
+}
+document.getElementById("pair-btn").addEventListener("click", async function () {
+  var out = document.getElementById("pair-out");
+  var name = document.getElementById("pair-name").value.trim() || "device";
+  try {
+    var r = await apiFetch("/api/connect/devices", {
+      method: "POST",
+      body: JSON.stringify({ name: name }),
+    });
+    var d = await r.json();
+    if (d.saved) {
+      out.innerHTML = '<span class="ok">✔ saved:</span> ' + esc(d.name) + " — this device is now in the registry.";
+      toast("Device saved");
+      document.getElementById("pair-name").value = "";
+      loadDevices();
+    } else out.textContent = "saving failed";
+  } catch (e) { out.textContent = "saving failed: " + (e.message || e); }
+});
+document.getElementById("dev-clear").addEventListener("click", async function () {
+  if (!window.confirm("Forget ALL saved devices?")) return;
+  try {
+    var r = await apiFetch("/api/connect/devices");
+    var d = await r.json();
+    var devs = d.devices || [];
+    for (var i = 0; i < devs.length; i++) {
+      await apiFetch("/api/connect/devices/" + devs[i].id, { method: "DELETE" });
+    }
+    toast("All devices forgotten");
+    loadDevices();
+  } catch (e) { toast("failed", true); }
+});
 
 // ── override host/port ───────────────────────────────────────────────
 document.getElementById("apply-btn").addEventListener("click", function () {
@@ -271,7 +364,7 @@ document.getElementById("verify-btn").addEventListener("click", async function (
   var btn = this, out = document.getElementById("verify-out");
   btn.disabled = true; out.textContent = "sending…"; out.className = "verify-out";
   try {
-    var r = await fetch("/api/connect/verify", { method: "POST" });
+    var r = await apiFetch("/api/connect/verify", { method: "POST" });
     var d = await r.json();
     if (d.ok) {
       out.innerHTML = '<span class="ok">✔ capture verified</span> — test request returned HTTP ' + d.status + " (" + d.bytes + " B). It is now in the Live tab.";
@@ -282,22 +375,6 @@ document.getElementById("verify-btn").addEventListener("click", async function (
     out.innerHTML = '<span class="bad">✘ ' + esc(String(e.message || e)) + "</span>";
   }
   btn.disabled = false;
-});
-document.getElementById("pair-btn").addEventListener("click", async function () {
-  var out = document.getElementById("pair-out");
-  var name = document.getElementById("pair-name").value.trim() || "device";
-  try {
-    var r = await fetch("/api/connect/pair", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name }),
-    });
-    var d = await r.json();
-    if (d.paired) {
-      out.innerHTML = '<span class="ok">✔ paired:</span> ' + esc(d.name);
-      toast("Device paired");
-    } else out.textContent = "pairing failed";
-  } catch (e) { out.textContent = "pairing failed: " + (e.message || e); }
 });
 
 loadInfo();

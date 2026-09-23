@@ -24,6 +24,13 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
     wizard (proxy address, PAC URL, CA install per OS, QR code for phones,
     `curl -x` one-liner, per-device pairing), plus a VPS/remote recipe in
     `docs/connect.md`.
+  - **Saved device registry** — devices paired on the connect page (or
+    dashboard Connect tab) persist in the capture DB: name, IP, browser,
+    first/last seen; list/forget from either UI or via
+    `GET/POST /api/connect/devices` + `DELETE /api/connect/devices/<id>`.
+  - **Android walkthrough** — per-Wi-Fi manual proxy for Chrome/Firefox
+    (incl. Firefox `about:config` route that works on mobile data), CA
+    install on Android 7+, VPS firewall checklist (`docs/connect.md`).
   - `miniproxy connect` — the same instructions in the terminal, with a
     scannable ANSI QR of the connect page (`--qr yes|no|auto`,
     `--host/--port` overrides).

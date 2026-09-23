@@ -112,8 +112,8 @@ miniproxy connect          # prints the exact settings + a scannable QR
 ```
 
 or open the dashboard's **Connect** tab (`http://127.0.0.1:5000/connect`):
-one-click PAC URL, CA download with per-OS steps, `curl -x` one-liners, and
-device pairing. The TUI shows the same cheat-sheet on `w`. Running MiniProxy
+one-click PAC URL, CA download with per-OS steps, `curl -x` one-liners, a
+persistent saved-device registry, and a scannable QR code. The TUI shows the same cheat-sheet on `w`. Running MiniProxy
 on a VPS and pointing your laptop/phone at it from anywhere?
 **[docs/connect.md](docs/connect.md)** covers both the SSH-tunnel and
 public-exposure patterns.
@@ -151,7 +151,7 @@ src/miniproxy/
 ```bash
 git clone https://github.com/Zaidux/miniproxy && cd miniproxy
 pip install -e ".[dev]"
-pytest                     # 90+ tests: db, API, exports, intruder, process mgr, TUI, connect
+pytest                     # 100+ tests: db, devices, API, exports, intruder, process mgr, TUI, connect
 ```
 
 CI runs the suite on Linux/macOS (Python 3.10/3.12) for every push and PR,
