@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MiniProxy — Connect a browser or device</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0d1117;--surface:#161b22;--panel:#10151c;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--orange:#d29922;--code:#0b0f14}
+html,body{font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+button{font:inherit}
+.wrap{max-width:880px;margin:0 auto;padding:28px 20px 60px}
+h1{font-size:22px;margin-bottom:4px}h1 span{color:var(--accent)}
+.sub{color:var(--muted);margin-bottom:20px;font-size:13.5px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:16px;overflow:hidden}
+.card-header{padding:10px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:10px}
+.step-no{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;flex:none}
+.card-body{padding:16px}
+.proxy-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.proxy-line code{background:var(--code);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:14px;font-weight:600}
+.badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11.5px;font-weight:700}
+.badge.on{color:var(--green);background:rgba(63,185,80,.15)}
+.badge.off{color:var(--orange);background:rgba(210,153,34,.15)}
+.hint{color:var(--muted);font-size:12.5px;margin-top:6px}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.urlbox{display:flex;gap:8px;align-items:stretch}
+.urlbox input{flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--code);color:var(--text);font:12.5px ui-monospace,Menlo,monospace;outline:none;min-width:0}
+.urlbox input:focus{border-color:var(--accent)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer;font-size:12.5px;white-space:nowrap;text-decoration:none}
+.btn:hover{background:var(--border)}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-success{background:var(--green);color:#fff;border-color:var(--green)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+pre.snippet{background:var(--code);border:1px solid var(--border);border-radius:6px;padding:10px 12px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:8px 0}
+details{border:1px solid var(--border);border-radius:8px;margin-top:10px;background:var(--panel)}
+details summary{cursor:pointer;padding:9px 14px;font-size:13px;font-weight:600;color:var(--text);list-style:none}
+details summary::-webkit-details-marker{display:none}
+details summary::before{content:"▸ ";color:var(--accent)}
+details[open] summary::before{content:"▾ "}
+details .detail-body{padding:4px 14px 12px}
+details .detail-body p{margin:8px 0 4px;color:var(--muted);font-size:12.5px}
+details .detail-body pre{margin:6px 0}
+.split{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.split>.col{flex:1 1 340px;min-width:0}
+#qr-box{display:flex;align-items:center;justify-content:center;background:#fff;border-radius:8px;padding:10px;min-height:180px}
+#qr-box img{width:200px;height:200px;display:block;image-rendering:pixelated}
+#pair-status{font-size:12.5px;color:var(--muted)}
+.verify-out{font-size:12.5px;margin-top:8px;min-height:18px}
+.ok{color:var(--green)}.bad{color:var(--red)}
+.footer-note{color:var(--muted);font-size:12px;margin-top:24px;text-align:center}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span>▶</span> Connect a browser or device</h1>
+  <p class="sub">Route any browser — on any OS, device, or network — through MiniProxy so every request it makes is captured in the dashboard and TUI. Works from a phone on your LAN or a laptop anywhere, pointing at this proxy over the internet.</p>
+
+  <!-- Step 1: proxy address -->
+  <div class="card">
+    <div class="card-header"><span class="step-no">1</span> Proxy address</div>
+    <div class="card-body">
+      <div class="proxy-line">
+        <code id="proxy-addr">…</code>
+        <span id="proxy-badge" class="badge off">checking…</span>
+      </div>
+      <p class="hint">This is the HTTP proxy to enter in your browser/OS settings. It is detected from how you opened this page — if you came in through an SSH tunnel or port-forward, it is already correct. Override below.</p>
+      <div class="urlbox" style="margin-top:10px">
+        <input id="host-input" placeholder="host or IP (e.g. 203.0.113.7)">
+        <input id="port-input" style="max-width:110px" placeholder="port">
+        <button class="btn" id="apply-btn">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: choose a method -->
+  <div class="card">
+    <div class="card-header"><span class="step-no">2</span> Point your browser at the proxy</div>
+    <div class="card-body">
+      <details open>
+        <summary>One-click — PAC URL (recommended)</summary>
+        <div class="detail-body">
+          <div class="field">
+            <label>PAC URL — paste into your browser/OS "automatic proxy configuration" field</label>
+            <div class="urlbox">
+              <input id="pac-url" readonly>
+              <button class="btn" data-copy="#pac-url">Copy</button>
+              <a class="btn" id="pac-open" href="/proxy.pac" target="_blank" rel="noopener">Open</a>
+            </div>
+          </div>
+          <details>
+            <summary>Where does the PAC URL go? (per platform)</summary>
+            <div class="detail-body">
+              <p><b>Chrome / Edge</b> — Settings → System → Open proxy settings → Use setup script → paste the PAC URL.</p>
+              <p><b>Firefox</b> — Settings → Network Settings → Automatic proxy configuration URL.</p>
+              <p><b>macOS</b> — System Settings → Network → Wi-Fi → Proxies → Automatic Proxy Configuration.</p>
+              <p><b>Windows</b> — Settings → Network → Proxy → Use setup script.</p>
+              <p><b>Android</b> — Wi-Fi long-press → Modify → Advanced → Proxy: PAC auto-config (per-network).</p>
+              <p><b>iOS</b> — Settings → Wi-Fi → (i) → Configure Proxy → Automatic → paste URL.</p>
+            </div>
+          </details>
+        </div>
+      </details>
+
+      <details>
+        <summary>Manual — host &amp; port (works everywhere, no PAC support needed)</summary>
+        <div class="detail-body">
+          <p>Set an HTTP proxy to <code id="proxy-addr-2">…</code> in your browser or OS proxy settings. Firefox-only browsers can set it under Firefox settings; system-wide under network settings.</p>
+          <p>Chrome on a device you can't reconfigure? Launch it with the proxy baked in:</p>
+          <pre class="snippet" id="chrome-cmd">…</pre>
+        </div>
+      </details>
+
+      <details>
+        <summary>Terminal tools — curl -x and friends</summary>
+        <div class="detail-body">
+          <pre class="snippet" id="curl-cmd">…</pre>
+          <pre class="snippet" id="env-cmd">…</pre>
+          <p>Any client that honors proxy environment variables (<code>pip</code>, <code>npm</code>, <code>git</code>, <code>requests</code>…) is captured the same way — see <a href="https://github.com/Zaidux/miniproxy/blob/main/docs/integrations.md" target="_blank" rel="noopener">docs/integrations.md</a>.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- Step 3: CA -->
+  <div class="card">
+    <div class="card-header"><span class="step-no">3</span> Trust the CA (HTTPS bodies)</div>
+    <div class="card-body">
+      <div class="split">
+        <div class="col">
+          <p class="hint" style="margin-top:0">Without this step HTTPS <b>still routes and is captured</b> (method, URL, status), but mitmproxy can't decode the encrypted body. Install mitmproxy's CA once per device to see request/response bodies.</p>
+          <div class="urlbox" style="margin-top:10px">
+            <input id="ca-url" readonly value="/ca.crt">
+            <a class="btn btn-primary" id="ca-download" href="/ca.crt" download>Download CA</a>
+          </div>
+          <p class="hint" id="ca-status">checking for the CA file on the proxy host…</p>
+          <details>
+            <summary>Install the CA (per OS)</summary>
+            <div class="detail-body">
+              <p><b>macOS</b> — open the .pem → Keychain Access → System → trust "Always Trust" for SSL.</p>
+              <p><b>Windows</b> — double-click the .pem → Install Certificate → Local Machine → "Trusted Root Certification Authorities".</p>
+              <p><b>Linux (Firefox)</b> — Settings → Privacy &amp; Security → Certificates → Import.</p>
+              <p><b>Linux (system)</b> — copy to <code>/usr/local/share/ca-certificates/miniproxy.crt</code> then run <code>sudo update-ca-certificates</code>.</p>
+              <p><b>Android</b> — Settings → Security → Install from storage (credential must be user-added; Android 7+ apps may ignore user CAs — use the browser).</p>
+              <p><b>iOS</b> — download → Settings → Profile Downloaded → Install → then enable full trust in About → Certificate Trust Settings.</p>
+            </div>
+          </details>
+        </div>
+        <div class="col">
+          <div id="qr-box"><img id="qr-img" alt="QR code of this connect page" hidden></div>
+          <p class="hint" style="text-align:center">Scan from a phone to open this exact page with the right addresses.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 4: verify -->
+  <div class="card">
+    <div class="card-header"><span class="step-no">4</span> Verify &amp; pair the device</div>
+    <div class="card-body">
+      <button class="btn btn-success" id="verify-btn">Send one proxied test request</button>
+      <div class="verify-out" id="verify-out"></div>
+      <p class="hint">Generates a request from <b>this proxy host</b> through MiniProxy — if it succeeds, capture works end-to-end. After connecting your browser, browse a site and confirm the requests appear in the <b>Live</b> tab.</p>
+      <div class="field" style="margin-top:14px">
+        <label>Give this device a name (marks it paired so you can spot it in the client list)</label>
+        <div class="urlbox">
+          <input id="pair-name" placeholder="e.g. iphone-safari, work-laptop">
+          <button class="btn" id="pair-btn">Pair device</button>
+        </div>
+        <div class="verify-out" id="pair-out"></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="footer-note">Captures persist in the SQLite DB until you click <b>Clear all captures…</b> — page refreshes never lose them. ⚠️ Intercept only traffic you are authorized to test.</p>
+</div>
+
+<script>
+"use strict";
+var state = { host: "", port: 0 };
+
+function esc(s) { if (s == null) return ""; var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function toast(msg, isErr) {
+  var t = document.getElementById("toast");
+  if (!t) {
+    t = document.createElement("div"); t.id = "toast";
+    t.style.cssText = "position:fixed;bottom:18px;left:50%;transform:translateX(-50%);padding:8px 18px;border-radius:6px;background:#1f6feb;color:#fff;font-size:13px;z-index:99;box-shadow:0 4px 14px rgba(0,0,0,.4)";
+    document.body.appendChild(t);
+  }
+  t.style.background = isErr ? "#b62324" : "#1f6feb";
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._timer);
+  t._timer = setTimeout(function () { t.style.display = "none"; }, 2200);
+}
+function copySel(sel) {
+  var el = document.querySelector(sel);
+  if (!el) return;
+  var text = el.value != null ? el.value : el.textContent;
+  function done() { toast("Copied"); }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(function () { toast("Copy failed", true); });
+  } else {
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); done(); } catch (e) { toast("Copy failed", true); }
+    ta.remove();
+  }
+}
+document.querySelectorAll("[data-copy]").forEach(function (b) {
+  b.addEventListener("click", function () { copySel(b.getAttribute("data-copy")); });
+});
+
+// ── load connect info ────────────────────────────────────────────────
+async function loadInfo() {
+  var data = null;
+  try {
+    var r = await fetch("/api/connect/info");
+    data = await r.json();
+  } catch (e) { /* fall through */ }
+  if (!data || data.error) { toast("Failed to load connect info", true); return; }
+  state.host = data.proxy.host; state.port = data.proxy.port;
+  document.getElementById("proxy-addr").textContent = data.proxy.address;
+  document.getElementById("proxy-addr-2").textContent = data.proxy.address;
+  var badge = document.getElementById("proxy-badge");
+  if (data.proxy.running) { badge.className = "badge on"; badge.textContent = "proxy running"; }
+  else { badge.className = "badge off"; badge.textContent = "proxy stopped — run miniproxy start"; }
+  document.getElementById("pac-url").value = data.pac_url;
+  document.getElementById("pac-open").href = data.pac_url;
+  document.getElementById("ca-url").value = data.ca_url;
+  document.getElementById("ca-download").href = data.ca_url;
+  var hostHdr = location.hostname;
+  var disp = (hostHdr === state.host || state.host.indexOf(hostHdr) === -1) ? state.host : hostHdr;
+  document.getElementById("chrome-cmd").textContent =
+    "chrome --proxy-server=http://" + state.host + ":" + state.port;
+  document.getElementById("curl-cmd").textContent = data.curl.plain;
+  document.getElementById("env-cmd").textContent =
+    "export http_proxy=http://" + state.host + ":" + state.port +
+    " https_proxy=http://" + state.host + ":" + state.port;
+  document.getElementById("host-input").value = state.host;
+  document.getElementById("port-input").value = String(state.port);
+  document.getElementById("ca-status").textContent = data.ca_available
+    ? "CA found at " + data.ca_path + " on the proxy host — download + trust it below."
+    : "No CA generated yet on the proxy host — run `mitmdump` once there (or set MINIPROXY_CA_CERT); HTTPS still routes either way.";
+  try {
+    document.getElementById("qr-img").src = "/connect/qr.svg?_=" + Date.now();
+    document.getElementById("qr-img").hidden = false;
+  } catch (e) { /* QR is decorative */ }
+  try {
+    var p = await fetch("/api/connect/pair");
+    var pj = await p.json();
+    if (pj.paired) {
+      document.getElementById("pair-out").innerHTML = '<span class="ok">last paired device:</span> ' + esc(pj.name) + (pj.at ? " · " + esc(String(pj.at).slice(0, 19).replace("T", " ")) : "");
+    }
+  } catch (e) { /* pairing history is optional */ }
+}
+
+// ── override host/port ───────────────────────────────────────────────
+document.getElementById("apply-btn").addEventListener("click", function () {
+  var h = document.getElementById("host-input").value.trim();
+  var p = parseInt(document.getElementById("port-input").value, 10);
+  if (!h || !p) { toast("Enter a host and a port first", true); return; }
+  var q = "?proxy_host=" + encodeURIComponent(h) + "&port=" + p;
+  location.href = "/connect" + q;  // re-detected server-side; QR follows along
+});
+
+// ── verify + pair ────────────────────────────────────────────────────
+document.getElementById("verify-btn").addEventListener("click", async function () {
+  var btn = this, out = document.getElementById("verify-out");
+  btn.disabled = true; out.textContent = "sending…"; out.className = "verify-out";
+  try {
+    var r = await fetch("/api/connect/verify", { method: "POST" });
+    var d = await r.json();
+    if (d.ok) {
+      out.innerHTML = '<span class="ok">✔ capture verified</span> — test request returned HTTP ' + d.status + " (" + d.bytes + " B). It is now in the Live tab.";
+    } else {
+      out.innerHTML = '<span class="bad">✘ ' + esc(d.error || "verification request failed") + "</span> — is the proxy running, and reachable from this host?";
+    }
+  } catch (e) {
+    out.innerHTML = '<span class="bad">✘ ' + esc(String(e.message || e)) + "</span>";
+  }
+  btn.disabled = false;
+});
+document.getElementById("pair-btn").addEventListener("click", async function () {
+  var out = document.getElementById("pair-out");
+  var name = document.getElementById("pair-name").value.trim() || "device";
+  try {
+    var r = await fetch("/api/connect/pair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name }),
+    });
+    var d = await r.json();
+    if (d.paired) {
+      out.innerHTML = '<span class="ok">✔ paired:</span> ' + esc(d.name);
+      toast("Device paired");
+    } else out.textContent = "pairing failed";
+  } catch (e) { out.textContent = "pairing failed: " + (e.message || e); }
+});
+
+loadInfo();
+</script>
+</body>
+</html>

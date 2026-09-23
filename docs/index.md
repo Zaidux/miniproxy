@@ -12,9 +12,13 @@ you can start the proxy once and inspect traffic from any interface.
 | [Setup](setup.md) | Install, first run, HTTPS/CA certificates, updating |
 | [CLI & TUI](cli-and-tui.md) | Every `miniproxy` command, TUI keys & workflows |
 | [Web UI](web-ui.md) | The browser dashboard that mirrors the TUI |
+| [Connect browsers & devices](connect.md) | Route any browser/OS/device through MiniProxy — local, LAN, or over the internet (VPS) — incl. `miniproxy connect`, PAC, CA, QR |
 | [Integrations](integrations.md) | curl, pip, Node, Python, Git, Docker, mobile devices, Burp/other proxies |
 | [Troubleshooting](troubleshooting.md) | Common errors and fixes, FAQ |
 | [Code audit](AUDIT.md) | Engineering review: fixed bugs, limitations, roadmap |
+
+Project docs: [Security policy](../SECURITY.md) · [Contributing](../CONTRIBUTING.md) ·
+[Code of Conduct](../CODE_OF_CONDUCT.md) · [Changelog](../CHANGELOG.md) · [Examples](../examples/README.md).
 
 ## The 30-second tour
 
@@ -25,7 +29,9 @@ miniproxy start                  # proxy on :8080 + web UI on :5000 (URL is prin
 
 Point any client (browser, curl, pip…) at `http://127.0.0.1:8080`, open the
 printed Web-UI URL in your browser — or run `miniproxy tui` in a terminal.
-Traffic shows up live in both.
+Traffic shows up live in both. To connect a browser with one click, open the
+dashboard's **Connect** tab and follow the wizard (PAC URL, CA, QR code) —
+see [connect.md](connect.md).
 
 ```bash
 miniproxy stop                   # when you're done

@@ -110,6 +110,30 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
 .export-menu hr{border:none;border-top:1px solid var(--border);margin:4px 0}
 .export-menu .danger{color:var(--red)}
 @media (max-width: 900px){.split{flex-direction:column}.detail-pane{max-width:none}}
+
+/* ── Connect tab ─────────────────────────────────────────────────── */
+.connect-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+.connect-grid .card{margin-bottom:0}
+.connect-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.addr{background:var(--code);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:14px;font-weight:600}
+.badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11.5px;font-weight:700}
+.badge.on{color:var(--green);background:rgba(63,185,80,.15)}
+.badge.off{color:var(--orange);background:rgba(210,153,34,.15)}
+.hosts{display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.hosts .hrow{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.hosts .haddr{font-family:ui-monospace,Menlo,monospace;color:var(--text)}
+.hosts .hlabel{color:var(--muted)}
+.field{margin-bottom:10px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.urlbox{display:flex;gap:8px;align-items:stretch}
+.urlbox input{flex:1;min-width:0}
+.hint{color:var(--muted);font-size:12px;margin-top:4px}
+.hint a{color:var(--accent)}
+.verify-out{font-size:12.5px;min-height:16px}
+.verify-out .ok{color:var(--green)}
+.verify-out .bad{color:var(--red)}
+.qr-wrap{width:180px;height:180px;background:#fff;border-radius:8px;padding:8px;display:flex;align-items:center;justify-content:center}
+.qr-wrap img{width:100%;height:100%;image-rendering:pixelated;display:block}
 </style>
 </head>
 <body>
@@ -127,6 +151,7 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
     <button class="tab" data-tab="log">Log</button>
     <button class="tab" data-tab="repeater">Repeater</button>
     <button class="tab" data-tab="intruder">Intruder</button>
+    <button class="tab" data-tab="connect">Connect</button>
   </div>
   <div class="export-wrap">
     <button class="btn btn-sm" id="export-btn" title="Download the filtered capture set">Export ▾</button>
@@ -304,6 +329,75 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
   </div>
 </div>
 
+<!-- ══════════ Connect tab — route any browser/device through MiniProxy ══════════ -->
+<div class="tab-content" id="t-connect">
+  <div class="connect-grid">
+    <div class="card">
+      <div class="card-header">1 · Proxy address</div>
+      <div class="card-body">
+        <div class="connect-line">
+          <code id="c-addr" class="addr">…</code>
+          <span id="c-badge" class="badge off">checking…</span>
+        </div>
+        <div class="hint">Detected from how you opened the dashboard (SSH tunnel / port-forward friendly). Other devices reach this same proxy at the addresses listed in “Addresses”.</div>
+        <div class="card-header" style="border-bottom:none;padding:12px 0 6px">Addresses</div>
+        <div id="c-hosts" class="hosts"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">2 · Point the browser here</div>
+      <div class="card-body">
+        <div class="field">
+          <label>PAC URL — browser/OS “automatic proxy configuration”</label>
+          <div class="urlbox">
+            <input id="c-pac" readonly>
+            <button class="btn btn-sm" id="c-pac-copy">Copy</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Or set an HTTP proxy manually (host:port above) · or one-liners:</label>
+          <pre class="rbody" id="c-curl" style="max-height:64px">…</pre>
+          <pre class="rbody" id="c-env" style="max-height:64px;margin-top:6px">…</pre>
+        </div>
+        <div class="hint">Full per-platform steps, phone setup, and VPS instructions live on the <a href="/connect" target="_blank" rel="noopener">Connect page ↗</a> and in docs/connect.md.</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">3 · Trust the CA (HTTPS bodies)</div>
+      <div class="card-body">
+        <div class="urlbox" style="margin-bottom:10px">
+          <input id="c-ca" readonly value="/ca.crt">
+          <a class="btn btn-sm btn-primary" id="c-ca-dl" href="/ca.crt" download>Download CA</a>
+        </div>
+        <div class="hint" id="c-ca-status">…</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">4 · Verify &amp; pair</div>
+      <div class="card-body">
+        <div class="connect-line">
+          <button class="btn btn-sm btn-success" id="c-verify">Send one proxied test request</button>
+          <span id="c-verify-out" class="verify-out"></span>
+        </div>
+        <div class="field" style="margin-top:8px">
+          <label>Name this device (pairing note)</label>
+          <div class="urlbox">
+            <input id="c-pair-name" placeholder="e.g. iphone-safari">
+            <button class="btn btn-sm" id="c-pair">Pair</button>
+          </div>
+          <div class="verify-out" id="c-pair-out"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">Scan from a phone</div>
+      <div class="card-body" style="display:flex;align-items:center;justify-content:center;gap:14px">
+        <div class="qr-wrap"><img id="c-qr" alt="QR code of the connect page" hidden></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════ Repeater modal (opened from the Live detail pane) ══════════ -->
 <div class="modal-backdrop" id="rep-modal">
   <div class="modal">
@@ -352,7 +446,7 @@ async function api(url, opts = {}) {
   try { data = await r.json(); } catch (e) { data = { error: "bad response" }; }
   if (r.status === 401 && data.error && String(data.error).indexOf("token") !== -1) {
     const t = window.prompt("This dashboard requires a token (set via --dashboard-token / MINIPROXY_DASHBOARD_TOKEN):");
-    if (t) { state.token = t; return api(url, opts); }
+    if (t) { state.token = t; saveSession("mp.token", t); return api(url, opts); }
   }
   return { ok: r.ok, status: r.status, data };
 }
@@ -426,8 +520,10 @@ document.querySelectorAll(".tab").forEach(tab => {
     document.querySelectorAll(".tab-content").forEach(tc => tc.classList.remove("active"));
     tab.classList.add("active");
     document.getElementById("t-" + tab.dataset.tab).classList.add("active");
+    saveSession("mp.tab", tab.dataset.tab);
     if (tab.dataset.tab === "log") loadLog();
     if (tab.dataset.tab === "repeater" || tab.dataset.tab === "intruder") refreshSel();
+    if (tab.dataset.tab === "connect") loadConnect();
   });
 });
 
@@ -444,6 +540,29 @@ document.querySelectorAll(".dtab").forEach(btn => {
 
 // ── state ────────────────────────────────────────────────────────────
 const state = { rows: [], selectedId: null, logCache: [], token: "" };
+
+// ── session persistence (survives page refreshes) ────────────────────
+// Captures themselves are restored from the SQLite DB by pollLive(); this
+// restores the UI session: active tab, filters, selection, token.
+function saveSession(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* private mode */ }
+}
+function restoreSession() {
+  try {
+    state.token = localStorage.getItem("mp.token") || "";
+    const tab = localStorage.getItem("mp.tab");
+    if (tab && document.querySelector('.tab[data-tab="' + tab + '"]'))
+      document.querySelector('.tab[data-tab="' + tab + '"]').click();
+    const fm = localStorage.getItem("mp.filter.method");
+    const fs = localStorage.getItem("mp.filter.status");
+    const fu = localStorage.getItem("mp.filter.url");
+    if (fm) document.getElementById("filter-method").value = fm;
+    if (fs) document.getElementById("filter-status").value = fs;
+    if (fu) document.getElementById("filter-url").value = fu;
+    const sid = parseInt(localStorage.getItem("mp.selected"), 10);
+    if (sid) state.selectedId = sid;  // validated once rows load
+  } catch (e) { /* storage unavailable — defaults are fine */ }
+}
 
 // ── proxy bar ────────────────────────────────────────────────────────
 async function refreshProxyBar() {
@@ -513,6 +632,7 @@ function renderLive() {
 }
 function selectRow(id) {
   state.selectedId = id;
+  saveSession("mp.selected", String(id));
   renderLive();
   setExportMenu();
   const e = state.rows.find(x => x.id === id);
@@ -534,8 +654,14 @@ async function pollLive() {
   } catch (e) {}
 }
 ["filter-method", "filter-status"].forEach(id =>
-  document.getElementById(id).addEventListener("change", renderLive));
-document.getElementById("filter-url").addEventListener("input", renderLive);
+  document.getElementById(id).addEventListener("change", ev => {
+    saveSession("mp.filter." + id.split("-")[2], ev.target.value);
+    renderLive();
+  }));
+document.getElementById("filter-url").addEventListener("input", ev => {
+  saveSession("mp.filter.url", ev.target.value);
+  renderLive();
+});
 
 // ── detail panes ─────────────────────────────────────────────────────
 function showDetail(e) {
@@ -813,6 +939,7 @@ document.getElementById("clear-btn").addEventListener("click", async () => {
   toast("Cleared " + data.removed + " capture(s)");
   state.rows = [];
   state.selectedId = null;
+  saveSession("mp.selected", "");
   setExportMenu();
   renderLive();
   document.getElementById("req-meta").textContent = "Select a request…";
@@ -820,10 +947,56 @@ document.getElementById("clear-btn").addEventListener("click", async () => {
   document.getElementById("d-int").textContent = "(none yet — run one from the Intruder tab)";
 });
 
+// ── connect tab (route any browser/device through MiniProxy) ─────────
+let connectLoaded = false;
+async function loadConnect() {
+  if (connectLoaded) return;
+  try {
+    const { data } = await api("/api/connect/info");
+    if (!data || data.error) return;
+    document.getElementById("c-addr").textContent = data.proxy.address;
+    const badge = document.getElementById("c-badge");
+    if (data.proxy.running) { badge.className = "badge on"; badge.textContent = "proxy running"; }
+    else { badge.className = "badge off"; badge.textContent = "proxy stopped — run miniproxy start"; }
+    document.getElementById("c-hosts").innerHTML = data.hosts.map(h =>
+      '<div class="hrow"><span class="haddr">' + esc(h.host) + '</span><span class="hlabel">' + esc(h.label) + "</span></div>"
+    ).join("");
+    document.getElementById("c-pac").value = data.pac_url;
+    document.getElementById("c-curl").textContent = data.curl.plain;
+    document.getElementById("c-env").textContent =
+      "export http_proxy=http://" + data.proxy.address + " https_proxy=http://" + data.proxy.address;
+    document.getElementById("c-ca-status").textContent = data.ca_available
+      ? "CA found on the proxy host — download it on the device and trust it to see HTTPS bodies."
+      : "No CA generated yet on the proxy host — run `mitmdump` once there (or set MINIPROXY_CA_CERT). HTTPS still routes either way.";
+    const img = document.getElementById("c-qr");
+    img.src = "/connect/qr.svg?_=" + Date.now();
+    img.hidden = false;
+    connectLoaded = true;
+  } catch (e) { /* connect info is best-effort */ }
+}
+document.getElementById("c-pac-copy").addEventListener("click", () =>
+  copyText(document.getElementById("c-pac").value, "PAC URL copied"));
+document.getElementById("c-verify").addEventListener("click", async function () {
+  const btn = this, out = document.getElementById("c-verify-out");
+  btn.disabled = true; out.textContent = "sending…";
+  const { data } = await api("/api/connect/verify", { method: "POST" });
+  btn.disabled = false;
+  if (data && data.ok) out.innerHTML = '<span class="ok">✔ captured</span> — HTTP ' + data.status + " (" + data.bytes + " B), see the Live tab";
+  else out.innerHTML = '<span class="bad">✘ ' + esc((data && data.error) || "failed") + "</span>";
+});
+document.getElementById("c-pair").addEventListener("click", async function () {
+  const out = document.getElementById("c-pair-out");
+  const name = document.getElementById("c-pair-name").value.trim() || "device";
+  const { data } = await api("/api/connect/pair", { method: "POST", body: JSON.stringify({ name }) });
+  if (data && data.paired) out.innerHTML = '<span class="ok">✔ paired:</span> ' + esc(data.name);
+  else out.innerHTML = '<span class="bad">✘ pairing failed</span>';
+});
+
 // ── boot ─────────────────────────────────────────────────────────────
 pollLive();
 setInterval(pollLive, 2000);
 refreshProxyBar();
+restoreSession();
 </script>
 </body>
 </html>

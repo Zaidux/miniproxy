@@ -9,6 +9,8 @@ Subcommands:
   dashboard  Run the Flask dashboard in the foreground
   web        Start the proxy AND the web dashboard in one step (alias of
              `start` with the dashboard forced on)
+  connect    Print exactly how to point any browser/device (here or
+             anywhere on the internet) at the running proxy — QR included
   tui        Run the terminal UI (Textual) — live feed, details, repeater
   send       Send a request through the dashboard's Repeater
   log        Show captured requests
@@ -74,6 +76,20 @@ def main(argv: list[str] | None = None) -> int:
     p_dash.add_argument("--token", default=None,
                         help="Require a token on mutating endpoints")
 
+    p_connect = sub.add_parser(
+        "connect",
+        help="Print how to point any browser/device at the running proxy",
+    )
+    p_connect.add_argument("--host", default=None,
+                           help="Override the advertised proxy host (default: "
+                                "auto-detect the best reachable address)")
+    p_connect.add_argument("--port", type=int, default=None,
+                           help="Override the advertised proxy port "
+                                "(default: the running proxy, else 8080)")
+    p_connect.add_argument("--qr", choices=["auto", "yes", "no"], default="auto",
+                           help="Print a scannable ANSI QR of the dashboard "
+                                "connect URL (default: auto — yes on a TTY)")
+
     p_tui = sub.add_parser("tui", help="Run the terminal UI (Textual)")
     p_tui.add_argument("--db", default=None, help="SQLite capture DB path")
     p_tui.add_argument("--refresh", type=float, default=2.0,
@@ -138,6 +154,59 @@ def main(argv: list[str] | None = None) -> int:
             print("⚠  Dashboard is LAN-exposed: captures contain tokens, cookies "
                   "and session data. Pass --token to require auth.")
         appmod.app.run(host=args.host, port=args.port, debug=False)
+        return 0
+
+    if args.command == "connect":
+        # 'From a terminal, how do I capture my browser on another device?'
+        # — resolved addresses, PAC/CA URLs, curl one-liners, and a QR.
+        # The dashboard does not need to be running (defaults are shown).
+        from miniproxy import connect as connect_helpers
+        from miniproxy import qrcode
+        from miniproxy import server
+
+        st = server.status()
+        proxy_port = args.port or st.get("port") or server.DEFAULT_PORT
+        # Prefer the explicitly configured dashboard port when known.
+        dash_port = st.get("dashboard") or server.DEFAULT_DASH_PORT
+        dash_host = args.host or connect_helpers.candidate_hosts(include_loopback=False)
+        dash_host = args.host or (dash_host[0]["host"] if dash_host else "127.0.0.1")
+
+        proxy_addr = f"{dash_host}:{proxy_port}"
+        base = f"http://{dash_host}:{dash_port}"
+        ca = connect_helpers.ca_cert_path()
+        print("\n═══ Connect any browser or device to MiniProxy ═══\n")
+        print(f"  HTTP proxy to enter in browser/OS settings:  {proxy_addr}")
+        state_note = "running" if st["status"] == "running" else "NOT RUNNING — start it with `miniproxy start`"
+        print(f"  Proxy status: {state_note}")
+        print("")
+        print("  1 · Point the browser at the proxy:")
+        print(f"       manual        →  HTTP proxy {proxy_addr}")
+        print(f"       PAC URL       →  {base}/proxy.pac   (paste into browser/OS 'automatic proxy config')")
+        print("")
+        print("  2 · Trust the CA to see HTTPS bodies (HTTP works without it):")
+        print(f"       download      →  {base}/ca.crt")
+        if ca.is_file():
+            print(f"       on this host  →  {ca}")
+        else:
+            print("       (not generated yet — run `mitmdump` once on the proxy host)")
+        print("")
+        print("  3 · Or capture terminal tools directly:")
+        print(f"       curl -x http://{proxy_addr} https://example.com")
+        print(f"       export http_proxy=http://{proxy_addr} https_proxy=http://{proxy_addr}")
+        print("")
+        print(f"  Full wizard (open in any browser):  {base}/connect")
+        show_qr = args.qr == "yes" or (args.qr == "auto" and sys.stdout.isatty())
+        if show_qr:
+            try:
+                print("\n  Scan to open the connect page on a phone:\n")
+                print(qrcode.qr_terminal(base + "/connect"))
+            except ValueError as exc:
+                print(f"\n  (QR unavailable: {exc})")
+        elif args.qr == "yes":
+            print("\n  (QR requested but output is not a TTY — skipping)")
+        print("")
+        print("  ⚠ Intercept only traffic you are authorized to test.")
+        print("  Detailed guide: docs/connect.md\n")
         return 0
 
     if args.command == "tui":

@@ -7,6 +7,7 @@ miniproxy start      Start the interception proxy (+ web dashboard) and print th
 miniproxy web        Alias of `start` — proxy AND web dashboard in one step
 miniproxy stop       Stop the proxy and the dashboard
 miniproxy status     Is the proxy running? Which port? Where's the Web UI?
+miniproxy connect    How to point any browser/device (here or over the internet) at the proxy
 miniproxy tui        Terminal UI (Textual) — live feed, filters, Repeater
 miniproxy dashboard  Run the web dashboard in the foreground (no proxy)
 miniproxy log        One-shot dump of captured requests
@@ -46,6 +47,28 @@ token on state-changing endpoints (see [web UI](web-ui.md#getting-the-url)).
 Both processes survive your terminal (they run in their own session).
 `miniproxy stop` takes them down.
 
+## connect
+
+Answers "how do I capture my browser on this machine / my phone / a laptop
+anywhere on the internet?" in the terminal:
+
+```bash
+miniproxy connect
+```
+
+prints the detected proxy address, the PAC URL, the CA download URL, curl
+one-liners, and — on an interactive terminal — a **scannable QR code** that
+opens the dashboard's connect wizard on a phone.
+
+```bash
+miniproxy connect --host 203.0.113.7 --port 8080   # override the advertised address
+miniproxy connect --qr yes                          # force the QR even when piped
+miniproxy connect --qr no                           # never print the QR
+```
+
+Full walkthrough (per-platform proxy settings, CA install, VPS patterns):
+[connect.md](connect.md).
+
 ## The TUI — `miniproxy tui`
 
 ```bash
@@ -80,6 +103,7 @@ Layout:
 | `y` | copy the **response body** |
 | `e` | **save the response body** to a timestamped file in the current directory |
 | `p` | **start/stop the proxy** (blocks ≤ 8s; runs off-thread) |
+| `w` | **connect a browser/device** — overlay with the proxy address, PAC URL, CA download, and curl one-liners |
 | `f` | focus the URL filter |
 | `t` / `s` | focus method / status filter |
 | `R` | force-refresh the table |

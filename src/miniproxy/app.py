@@ -24,6 +24,7 @@ from flask import (
     request as flask_request,
 )
 
+from miniproxy import connect as connect_helpers
 from miniproxy import server as proxy_server
 from miniproxy.addon.db import Database
 from miniproxy.intruder import Intruder
@@ -119,6 +120,157 @@ def _safe_filename(name: str, fallback: str = "miniproxy") -> str:
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+# ── Remote-browser connect flow ────────────────────────────────────────
+# Point ANY browser or HTTP client — on any OS, device, or network — at the
+# interception proxy: /connect explains it, /proxy.pac configures it,
+# /ca.crt decrypts it. `curl -x` style explicit proxies keep working too.
+# Host detection / PAC generation live in miniproxy.connect so the CLI,
+# TUI, and dashboard all advertise the same addresses.
+
+PAC_MIME = connect_helpers.PAC_MIME
+
+
+def _candidate_hosts() -> list[dict[str, str]]:
+    """Candidate proxy hosts, best first (the request's Host header wins)."""
+    return connect_helpers.candidate_hosts(flask_request.host)
+
+
+def _proxy_target(proxy_host: str | None, proxy_port: int | None) -> tuple[str, int]:
+    """Resolve the proxy host:port to advertise (query overrides → running
+    proxy → defaults)."""
+    args = flask_request.args
+    running = proxy_server.status().get("port")
+    return connect_helpers.resolve_proxy_target(
+        proxy_host or args.get("proxy_host", ""),
+        proxy_port or args.get("port", type=int),
+        flask_request.host,
+        running_port=running,
+        default_port=proxy_server.DEFAULT_PORT,
+    )
+
+
+@app.route("/proxy.pac")
+def proxy_pac():
+    """Proxy auto-config so browsers/OSes can point themselves at MiniProxy."""
+    host, port = _proxy_target(None, None)
+    return Response(
+        connect_helpers.pac_body(host, port),
+        mimetype=PAC_MIME,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.route("/ca.crt")
+def ca_cert():
+    """Serve mitmproxy's CA so devices can trust HTTPS interception without
+    shell access. Read-only — never requires the dashboard token."""
+    ca = connect_helpers.ca_cert_path()
+    if not ca.is_file():
+        return jsonify({
+            "error": "CA certificate not found — run `mitmdump` once to generate it "
+                     "(or set MINIPROXY_CA_CERT).",
+        }), 404
+    pem = ca.read_bytes()
+    return Response(
+        pem,
+        mimetype="application/x-x509-ca-cert",
+        headers={
+            "Content-Disposition": 'attachment; filename="miniproxy-ca-cert.pem"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.route("/connect/qr.svg")
+def connect_qr():
+    """QR code (SVG) of the connect page URL — scan it from a phone."""
+    from miniproxy import qrcode
+
+    url = flask_request.url.replace("/connect/qr.svg", "/connect", 1)
+    try:
+        svg = qrcode.qr_svg(url)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return Response(svg, mimetype="image/svg+xml")
+
+
+@app.route("/api/connect/info")
+def connect_info():
+    """Everything the Connect wizard needs: addresses, PAC/CA URLs, samples."""
+    host, port = _proxy_target(None, None)
+    hdr = urlsplit(f"//{flask_request.host or ''}")
+    base = f"{hdr.scheme or 'http'}://{flask_request.host}"
+    ca = connect_helpers.ca_cert_path()
+    st = proxy_server.status()
+    proxy_running = st["status"] == "running"
+    curl = f"curl -x http://{host}:{port} https://example.com"
+    return jsonify({
+        "proxy": {"host": host, "port": port, "running": proxy_running,
+                  "address": f"{host}:{port}"},
+        "dashboard": {"url": base + "/", "token_required": bool(DASHBOARD_TOKEN)},
+        "pac_url": base + "/proxy.pac",
+        "ca_url": base + "/ca.crt",
+        "ca_available": ca.is_file(),
+        "ca_path": str(ca),
+        "connect_url": base + "/connect",
+        "hosts": _candidate_hosts(),
+        "curl": {
+            "plain": curl,
+            "with_ca": f"curl --cacert ca.pem -x http://{host}:{port} https://example.com",
+        },
+    })
+
+
+@app.route("/api/connect/verify", methods=["POST"])
+def connect_verify():
+    """Generate one proxied request from the dashboard so the user can see
+    capture working end-to-end (only useful when the proxy is on this host)."""
+    host, port = _proxy_target(None, None)
+    proxies = {"http": f"http://{host}:{port}", "https": f"http://{host}:{port}"}
+    try:
+        resp = requests.get(
+            "https://api.github.com/zen", proxies=proxies, timeout=10,
+            verify=False, allow_redirects=False,
+        )
+        return jsonify({"ok": True, "status": resp.status_code, "bytes": len(resp.content)})
+    except requests.RequestException as exc:
+        return jsonify({"ok": False, "error": str(exc)[:200]}), 200
+
+
+@app.route("/api/connect/pair", methods=["GET", "POST"])
+def connect_pair():
+    """Record/confirm that a device completed the connect steps.
+
+    GET returns the last pair event; POST records one (name optional).
+    Stored in the capture DB's config table — survives restarts, is capped
+    and sanitized, and is visible in both UIs' client lists.
+    """
+    if flask_request.method == "POST":
+        data = flask_request.get_json(silent=True) or {}
+        name = str(data.get("name") or "device").strip()
+        # Keep it a safe short label (it is shown in dashboards/TUIs).
+        name = "".join(c for c in name if c.isalnum() or c in " ._-")[:40] or "device"
+        db.set_config("last_pair", name)
+        db.set_config("last_pair_at", _utcnow_iso())
+        return jsonify({"paired": True, "name": name})
+    name = db.get_config("last_pair")
+    if not name:
+        return jsonify({"paired": False})
+    return jsonify({"paired": True, "name": name, "at": db.get_config("last_pair_at")})
+
+
+def _utcnow_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+@app.route("/connect")
+def connect_page():
+    """Standalone wizard: connect any browser/device to the proxy."""
+    return render_template("connect.html")
 
 
 # ── Proxy API ──────────────────────────────────────────────────────────

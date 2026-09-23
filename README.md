@@ -11,6 +11,7 @@ Ships the **v4 capture engine** (the same addon the Riciplay CLI embeds):
 - **Repeater** — pick a logged request, edit method/headers/body, resend, inspect.
 - **Intruder** — mark parameters with `§param§` placeholders, supply a wordlist, fuzz every position; results highlighted by status code and stored in the DB.
 - **TUI** — a full terminal UI (`miniproxy tui`, built with [Textual](https://textual.textualize.io)): live capture feed, master–detail inspection, filters, Repeater, Intruder results, and proxy control — no browser needed.
+- **Connect any browser** — the dashboard's **Connect** tab serves a PAC file, the CA cert, and a QR code so your browser (on any OS/device, including over SSH to a VPS) can route itself through MiniProxy.
 
 ## Install
 
@@ -34,9 +35,9 @@ miniproxy dashboard                      # web UI in the foreground (Log/Repeate
 miniproxy stop                           # stop proxy + dashboard
 ```
 
-Then point your browser/system at `http://127.0.0.1:8080` (HTTPS interception uses mitmproxy's CA — run `mitmdump` once and install `~/.mitmproxy/mitmproxy-ca-cert.pem` if you haven't). Capture is always on while the proxy runs; the web UI and TUI are just windows onto the same capture DB.
+Then point your browser/system at `http://127.0.0.1:8080` — the dashboard's **Connect** tab (`/connect`) prints the exact settings, a one-click PAC URL, the CA download, and a QR code. HTTPS interception uses mitmproxy's CA — install it from the Connect tab or run `mitmdump` once (`~/.mitmproxy/mitmproxy-ca-cert.pem`). Capture is always on while the proxy runs; the web UI and TUI are just windows onto the same capture DB. Running the proxy on a VPS or another machine? See [docs/connect.md](docs/connect.md).
 
-📚 **Full documentation in [`docs/`](docs/index.md)** — [setup](docs/setup.md) · [CLI & TUI](docs/cli-and-tui.md) · [web UI](docs/web-ui.md) · [integrations](docs/integrations.md) · [troubleshooting](docs/troubleshooting.md) · [code audit](docs/AUDIT.md).
+📚 **Full documentation in [`docs/`](docs/index.md)** — [setup](docs/setup.md) · [CLI & TUI](docs/cli-and-tui.md) · [web UI](docs/web-ui.md) · [connect browsers & devices](docs/connect.md) · [integrations](docs/integrations.md) · [troubleshooting](docs/troubleshooting.md) · [code audit](docs/AUDIT.md).
 
 ```bash
 miniproxy log                  # recent captured requests (with timing; reads the DB directly)
@@ -92,10 +93,38 @@ Tools that ignore proxy env vars can usually be pointed explicitly (`curl -x`, `
 
 `miniproxy dashboard` serves a dark-theme SPA:
 
-- **Proxy** — capture status and scope
-- **Log** — live request feed; click any row for full headers/bodies/timing
+- **Live** — capture status, live request feed; click any row for full headers/bodies/timing
+- **Log** — the complete request history
 - **Repeater** — edit and resend any captured request
 - **Intruder** — `§param§` placeholders + wordlist fuzzing, results by status code
+- **Connect** — PAC URL, CA download, QR code, and step-by-step settings for connecting any browser/device (including remotely)
+
+Captures persist across refreshes and restarts until you click
+**Clear all captures…**.
+
+## Connecting a browser (yours, a phone, or anywhere)
+
+You don't need a browser in your terminal — you need the browser to send its
+traffic *through* the proxy:
+
+```bash
+miniproxy connect          # prints the exact settings + a scannable QR
+```
+
+or open the dashboard's **Connect** tab (`http://127.0.0.1:5000/connect`):
+one-click PAC URL, CA download with per-OS steps, `curl -x` one-liners, and
+device pairing. The TUI shows the same cheat-sheet on `w`. Running MiniProxy
+on a VPS and pointing your laptop/phone at it from anywhere?
+**[docs/connect.md](docs/connect.md)** covers both the SSH-tunnel and
+public-exposure patterns.
+
+## Community & project docs
+
+- [Security policy](SECURITY.md) — report vulnerabilities privately; responsible-use rules
+- [Contributing](CONTRIBUTING.md) — dev setup, testing requirements, PR process
+- [Code of Conduct](CODE_OF_CONDUCT.md) — Contributor Covenant
+- [Changelog](CHANGELOG.md) — every release
+- [Examples](examples/) — curl / pip / npm / Python / VPS recipes
 
 ## Relation to the Riciplay CLI
 
@@ -122,7 +151,7 @@ src/miniproxy/
 ```bash
 git clone https://github.com/Zaidux/miniproxy && cd miniproxy
 pip install -e ".[dev]"
-pytest                     # 62 tests: db, API, exports, intruder, process mgr, TUI
+pytest                     # 90+ tests: db, API, exports, intruder, process mgr, TUI, connect
 ```
 
 CI runs the suite on Linux/macOS (Python 3.10/3.12) for every push and PR,

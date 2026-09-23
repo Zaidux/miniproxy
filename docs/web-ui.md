@@ -115,6 +115,23 @@ Click a row to jump to that request selected in the Live tab.
 Results are also visible in the Live tab's Intruder pane (select the base
 request) and from the CLI/TUI.
 
+## Connect tab
+
+The **Connect** tab is the dashboard's wizard for routing *other* browsers
+and devices (phone, laptop, anything) through MiniProxy — including from
+anywhere over the internet when the proxy runs on a VPS. It shows the
+detected proxy address, the one-click **PAC URL**, the CA download with
+per-OS install steps, a QR code for phones, and a one-click verify + device
+pairing. Full walkthrough: [connect.md](connect.md).
+
+## Session persistence
+
+Captures are stored in SQLite, so a page refresh (or closing and reopening
+the dashboard) never loses them — only **Clear all captures…** does. The UI
+session also survives refreshes via `localStorage`: active tab, method/status/
+URL filters, the selected request, and the dashboard token you typed at the
+401 prompt are restored on load. Clearing site data resets all of it.
+
 ## Proxy control from the browser
 
 The header **Start/Stop** button calls the same process manager as the

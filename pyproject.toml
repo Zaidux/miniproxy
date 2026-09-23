@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "Zaidux"},
 ]
-keywords = ["proxy", "mitmproxy", "interception", "security", "bugbounty", "repeater", "intruder"]
+keywords = ["proxy", "mitmproxy", "interception", "security", "bugbounty", "repeater", "intruder", "pac"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -42,6 +42,8 @@ miniproxy = "miniproxy.__main__:main"
 [project.urls]
 Homepage = "https://github.com/Zaidux/miniproxy"
 Repository = "https://github.com/Zaidux/miniproxy"
+Changelog = "https://github.com/Zaidux/miniproxy/blob/main/CHANGELOG.md"
+Security = "https://github.com/Zaidux/miniproxy/blob/main/SECURITY.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/miniproxy"]
@@ -51,9 +53,15 @@ include = [
     "src/miniproxy",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
     "package.json",
     "bin",
     "scripts",
+    "examples",
+    "docs",
 ]
 
 [tool.pytest.ini_options]

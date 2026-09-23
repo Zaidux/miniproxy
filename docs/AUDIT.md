@@ -150,6 +150,12 @@ from the original audit are **resolved** (see §6); the remaining ones:
 8. **Static `templates/index.html` ships inline JS/CSS.** Fine for size;
    CI's JS parse check catches the class of quote-count bugs fixed during
    this audit. A ruff lint pass is still worth adding.
+9. **Remote browser capture.** ✅ Resolved — the dashboard serves a
+   PAC file (`/proxy.pac`), the CA (`/ca.crt`), and a **Connect** wizard
+   (`/connect`) that walks through proxy settings, CA install, and device
+   pairing (QR) for any OS — including browsers connecting to a proxy
+   running on a VPS. `curl -x` and other explicit-proxy integrations keep
+   working unchanged. See `docs/connect.md`.
 
 ---
 
@@ -164,13 +170,13 @@ from the original audit are **resolved** (see §6); the remaining ones:
 | Test suite | ✅ `tests/` — 62 pytest tests across db, API, intruder, server, TUI |
 | CI | ✅ GitHub Actions — Linux/macOS × py3.10/3.12 + JS syntax check |
 | Dashboard security posture | ✅ loopback default, opt-in LAN bind, optional token auth, scoped CORS |
-| `CONTRIBUTING.md` | ❌ missing |
-| Security policy (`SECURITY.md`) | ❌ missing — **strongly recommended** for a security tool; state explicitly: authorized testing only, lab use, no warranty |
-| Code of Conduct | ❌ missing (can adopt Contributor Covenant verbatim) |
-| Issue templates | ❌ missing |
-| `py.typed` / type annotations | ⚠️ annotated source but no `py.typed` marker |
-| Changelog | ⚠️ git history only; add `CHANGELOG.md` before the next release |
-| Example scripts | ❌ missing — a `examples/` dir with 3 curl/pip/npm recipes would double as marketing |
+| `CONTRIBUTING.md` | ✅ added — dev setup, test requirements, PR process |
+| Security policy (`SECURITY.md`) | ✅ added — private disclosure via GitHub advisories, responsible-use statement, scope, safe harbor |
+| Code of Conduct | ✅ added — Contributor Covenant v2.1 |
+| Issue templates | ✅ added — bug report + feature request + config linking private security reporting |
+| `py.typed` / type annotations | ✅ added — PEP 561 marker shipped in the wheel |
+| Changelog | ✅ added — `CHANGELOG.md` (Keep a Changelog format) |
+| Example scripts | ✅ added — `examples/` (curl, pip/npm, Python requests, remote VPS) |
 
 **Verdict:** the code is in good shape for open-sourcing *as a clearly-labeled
 security-research tool*. The dashboard security posture and the test suite

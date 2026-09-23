@@ -50,8 +50,15 @@ def app_client(db_path: str, monkeypatch):
 def _isolate_home(tmp_path: Path, monkeypatch):
     """Keep tests away from real ~/.miniproxy state (pid files etc.)."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    # server.py computes STATE_DIR at import time; point it at the sandbox too.
+    # server.py computes STATE_DIR *and* the pid/port file constants at
+    # import time; patch all of them so a developer's leftover mitmdump
+    # state can never make tests think a proxy is (or isn't) running.
     from miniproxy import server as servermod
 
-    monkeypatch.setattr(servermod, "STATE_DIR", tmp_path / ".miniproxy")
+    state = tmp_path / ".miniproxy"
+    monkeypatch.setattr(servermod, "STATE_DIR", state)
+    monkeypatch.setattr(servermod, "PID_FILE", state / "mitmdump.pid")
+    monkeypatch.setattr(servermod, "PORT_FILE", state / "mitmdump.port")
+    monkeypatch.setattr(servermod, "DASH_PID_FILE", state / "dashboard.pid")
+    monkeypatch.setattr(servermod, "DASH_PORT_FILE", state / "dashboard.port")
     yield

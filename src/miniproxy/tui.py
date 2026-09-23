@@ -124,6 +124,74 @@ class DetailViewer(RichLog):
         self.write(renderable)
 
 
+class ConnectScreen(ModalScreen[None]):
+    """How to point any browser/device (here or over the internet) at the proxy.
+
+    Mirrors `miniproxy connect` and the dashboard's Connect tab: detected
+    addresses, PAC/CA URLs, curl one-liners, and a scannable ANSI QR of the
+    dashboard's /connect page.
+    """
+
+    CSS = """
+    ConnectScreen {
+        align: center middle;
+        background: $surface;
+    }
+    #connect-wrap {
+        width: 84;
+        max-width: 94%;
+        height: auto;
+        max-height: 92%;
+        padding: 1 2;
+        border: round $accent;
+        background: $surface;
+    }
+    #connect-viewer { height: auto; max-height: 24; }
+    #connect-close { margin-top: 1; }
+    """
+
+    BINDINGS = [Binding("escape,w", "dismiss_screen", "Close")]
+
+    def __init__(self, proxy_addr: str, dashboard_base: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._proxy_addr = proxy_addr
+        self._base = dashboard_base
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("[b]Connect any browser or device[/b]"),
+            DetailViewer("connect-viewer"),
+            Button("Close (Esc)", id="connect-close", variant="primary"),
+            id="connect-wrap",
+        )
+
+    def on_mount(self) -> None:
+        from rich.text import Text
+
+        body = Text()
+        body.append("HTTP proxy for any browser/device:  ", style="dim")
+        body.append(f"{self._proxy_addr}\n", style="bold")
+        body.append("1 · Point the browser here\n", style="bold cyan")
+        body.append(f"    manual   →  HTTP proxy {self._proxy_addr}\n")
+        body.append(f"    PAC URL  →  {self._base}/proxy.pac\n")
+        body.append("2 · Trust the CA for HTTPS bodies\n", style="bold cyan")
+        body.append(f"    download →  {self._base}/ca.crt\n")
+        body.append("3 · Or capture terminal tools\n", style="bold cyan")
+        body.append(f"    curl -x http://{self._proxy_addr} https://example.com\n")
+        body.append(f"    export http_proxy=http://{self._proxy_addr} https_proxy=http://{self._proxy_addr}\n")
+        body.append("Full wizard: ", style="dim")
+        body.append(f"{self._base}/connect\n", style="bold")
+        # Widgets are mounted by now — safe to fill the viewer.
+        self.query_one("#connect-viewer", DetailViewer).load(body)
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "connect-close":
+            self.dismiss()
+
+
 class HelpScreen(ModalScreen[None]):
     """Full-screen keybinding cheatsheet."""
 
@@ -159,6 +227,7 @@ class HelpScreen(ModalScreen[None]):
             ("y", "Copy response body to clipboard"),
             ("e", "Save response body to a file"),
             ("p", "Toggle the proxy (start / stop)"),
+            ("w", "How to connect a browser/device (proxy address, PAC, CA, QR)"),
             ("R", "Force-refresh the request table"),
             ("f / t / s", "Focus URL / method / status filter"),
             ("j k / ↑ ↓", "Move in the request table"),
@@ -364,6 +433,7 @@ class MiniProxyTUI(App[None]):
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "help", "Help"),
         Binding("p", "toggle_proxy", "Proxy"),
+        Binding("w", "show_connect", "Connect device"),
         Binding("r,enter", "open_repeater", "Repeater"),
         Binding("i", "show_intruder", "Intruder"),
         Binding("c", "copy_curl", "Copy curl"),
@@ -542,6 +612,24 @@ class MiniProxyTUI(App[None]):
             )
         else:
             label.update("[b]proxy[/b] [red]stopped[/red] — [dim]p to start[/dim]")
+
+    def action_show_connect(self) -> None:
+        """Open the connect cheat-sheet for external browsers/devices."""
+        st = proxy_status()
+        port = st.get("port")
+        proxy_addr = f"127.0.0.1:{port or 8080}"
+        base = f"http://127.0.0.1:{st.get('dashboard') or 5000}"
+        # Prefer an externally reachable address when one exists so the
+        # snippet is usable from another device, not just this machine.
+        try:
+            from miniproxy.connect import candidate_hosts
+
+            cands = candidate_hosts(include_loopback=False)
+            if cands:
+                proxy_addr = f"{cands[0]['host']}:{port or 8080}"
+        except Exception:
+            pass
+        self.push_screen(ConnectScreen(proxy_addr, base))
 
     @work(thread=True, exclusive=True, group="proxy-toggle")
     def action_toggle_proxy(self) -> None:
