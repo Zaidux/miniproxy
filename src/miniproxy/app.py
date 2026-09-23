@@ -1,4 +1,10 @@
-"""MiniProxy Flask dashboard — web UI and API for Log, Repeater, and Intruder."""
+"""MiniProxy Flask dashboard — web UI and API for Log, Repeater, and Intruder.
+
+The web UI mirrors the Textual TUI: a live capture table with filters on the
+left, Request/Response/Intruder detail tabs on the right, and a Repeater
+modal. It reads the same SQLite capture DB, so both views show identical
+data whether or not the proxy is running.
+"""
 from __future__ import annotations
 
 import json
@@ -8,6 +14,7 @@ from pathlib import Path
 import requests
 from flask import Flask, jsonify, render_template, request as flask_request
 
+from miniproxy import server as proxy_server
 from miniproxy.addon.db import Database
 from miniproxy.intruder import Intruder, IntruderError
 
@@ -62,6 +69,35 @@ def proxy_status():
     })
 
 
+@app.route("/api/proxy/state")
+def proxy_state():
+    """Live proxy process state for the header bar (mirrors the TUI proxy bar)."""
+    st = proxy_server.status()
+    return jsonify({
+        "running": st["status"] == "running",
+        "pid": st.get("pid"),
+        "port": st.get("port"),
+        "db_path": st.get("db"),
+        "message": st.get("message", ""),
+    })
+
+
+@app.route("/api/proxy/toggle", methods=["POST"])
+def proxy_toggle():
+    """Start or stop the capture proxy (equivalent of the TUI's `p` key)."""
+    data = flask_request.get_json(silent=True) or {}
+    action = str(data.get("action", "")).lower()
+    st = proxy_server.status()
+    if action == "start" or (not action and st["status"] != "running"):
+        result = proxy_server.start(with_dashboard=False)
+    elif action == "stop" or (not action and st["status"] == "running"):
+        result = proxy_server.stop()
+    else:
+        return jsonify({"error": "action must be 'start' or 'stop'"}), 400
+    code = 200 if result["status"] in ("started", "stopped", "already_running", "not_running") else 503
+    return jsonify(result), code
+
+
 # ── Log API ────────────────────────────────────────────────────────────
 
 @app.route("/api/logs")
@@ -78,6 +114,22 @@ def get_log_detail(req_id):
     if entry is None:
         return jsonify({"error": "not found"}), 404
     return jsonify(entry)
+
+
+# ── Meta API ───────────────────────────────────────────────────────────
+
+@app.route("/api/meta")
+def meta():
+    """Header-bar info: db path, proxy state, dashboard + proxy URLs."""
+    from miniproxy import __version__
+    st = proxy_server.status()
+    return jsonify({
+        "version": __version__,
+        "db_path": db.db_path,
+        "proxy_running": st["status"] == "running",
+        "proxy_port": st.get("port"),
+        "proxy_pid": st.get("pid"),
+    })
 
 
 # ── Repeater API ───────────────────────────────────────────────────────

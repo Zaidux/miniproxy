@@ -27,7 +27,10 @@ from typing import Any, Optional
 STATE_DIR = Path(os.environ.get("MINIPROXY_STATE_DIR", Path.home() / ".miniproxy"))
 PID_FILE = STATE_DIR / "mitmdump.pid"
 PORT_FILE = STATE_DIR / "mitmdump.port"
+DASH_PID_FILE = STATE_DIR / "dashboard.pid"
+DASH_PORT_FILE = STATE_DIR / "dashboard.port"
 DEFAULT_PORT = 8080
+DEFAULT_DASH_PORT = 5000
 
 
 def addon_path() -> Path:
@@ -50,6 +53,23 @@ def _process_exists(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _pid_matches(pid: int, *needles: str) -> bool:
+    """True if /proc/<pid>/cmdline contains every needle (pid-reuse guard).
+
+    A stale pid file can point at a recycled PID belonging to a totally
+    unrelated process; before trusting or killing it, verify the command
+    line actually looks like ours. Non-Linux platforms (no /proc) skip
+    the check and keep the old behavior.
+    """
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            cmdline = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return True  # cannot verify — assume match (macOS/Windows)
+    lowered = cmdline.lower()
+    return all(n.lower() in lowered for n in needles)
 
 
 def _port_free(port: int) -> bool:
@@ -76,6 +96,20 @@ def _wait_listening(port: int, proc: subprocess.Popen, timeout: float = 8.0) -> 
     return False
 
 
+def _read_dash_pid() -> Optional[int]:
+    try:
+        return int(DASH_PID_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _read_dash_port() -> Optional[int]:
+    try:
+        return int(DASH_PORT_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def start(
     *,
     port: int = DEFAULT_PORT,
@@ -84,6 +118,9 @@ def start(
     out_of_scope: str = "skip",
     mitmdump_path: str = "mitmdump",
     extra_args: Optional[list[str]] = None,
+    dashboard: bool = True,
+    dash_port: int = DEFAULT_DASH_PORT,
+    with_dashboard: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Start the interception proxy as a background subprocess.
 
@@ -96,16 +133,27 @@ def start(
         out_of_scope:  ``"skip"`` (default) or ``"block"``.
         mitmdump_path: Path to the mitmdump binary.
         extra_args:    Additional CLI flags forwarded to mitmdump.
+        dashboard:     Also launch the web dashboard (default True) and
+                       include its URL in the result. Capture is unchanged —
+                       the dashboard only reads the same SQLite DB.
+        dash_port:     Port for the web dashboard (default 5000).
     """
     pid = _read_pid()
-    if pid is not None and _process_exists(pid):
+    if pid is not None and _process_exists(pid) and _pid_matches(pid, "mitmdump"):
         running_port = _read_port()
-        return {
+        result = {
             "status": "already_running",
             "pid": pid,
             "port": running_port,
             "message": f"MiniProxy is already running (PID {pid}).",
         }
+        if dashboard or with_dashboard:
+            result["dashboard"] = _ensure_dashboard(db_path, dash_port)
+        return result
+    if pid is not None:
+        # Dead or recycled PID — clean the stale state and start fresh.
+        PID_FILE.unlink(missing_ok=True)
+        PORT_FILE.unlink(missing_ok=True)
 
     script = addon_path()
     if not script.exists():
@@ -136,10 +184,17 @@ def start(
          "--listen-port", str(port)]
         + (extra_args or [])
     )
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env=env, start_new_session=True,
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=env, start_new_session=True,
+        )
+    except FileNotFoundError:
+        return {"status": "error",
+                "message": f"'{mitmdump_path}' not found — install mitmproxy "
+                           "(pip install mitmproxy) or pass --mitmdump."}
+    except OSError as exc:
+        return {"status": "error", "message": f"failed to launch mitmdump: {exc}"}
     time.sleep(0.5)
     if proc.poll() is not None:
         return {"status": "error",
@@ -155,26 +210,111 @@ def start(
         f", scope={len(hosts)} host(s) (out-of-scope: "
         f"{env.get('MINIPROXY_SCOPE_MODE', 'skip')})" if hosts else ""
     )
-    return {
+    result = {
         "status": "started",
         "pid": proc.pid,
         "port": port,
         "db": db,
         "message": f"MiniProxy started on :{port} (PID {proc.pid}, db={db}{scope_note})",
     }
+    if dashboard or with_dashboard:
+        result["dashboard"] = _ensure_dashboard(db, dash_port)
+    return result
+
+
+def _ensure_dashboard(db_path: Optional[str], dash_port: int) -> dict[str, Any]:
+    """Launch the Flask dashboard as a daemon, or report the running one.
+
+    Returns a dict with ``url`` so callers (CLI, TUI, tests) can point the
+    user at a browser without guessing ports.
+    """
+    dash_pid = _read_dash_pid()
+    if dash_pid is not None and _process_exists(dash_pid) and _pid_matches(dash_pid, "miniproxy", "dashboard"):
+        port_running = _read_dash_port() or dash_port
+        return {
+            "status": "already_running",
+            "pid": dash_pid,
+            "port": port_running,
+            "url": f"http://127.0.0.1:{port_running}",
+            "message": f"Dashboard already running at http://127.0.0.1:{port_running}",
+        }
+    if dash_pid is not None:
+        DASH_PID_FILE.unlink(missing_ok=True)
+        DASH_PORT_FILE.unlink(missing_ok=True)
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    if db_path:
+        env["MINIPROXY_DB_PATH"] = str(db_path)
+    cmd = [
+        sys.executable, "-m", "miniproxy", "dashboard",
+        "--host", "0.0.0.0", "--port", str(dash_port),
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=env, start_new_session=True,
+        )
+    except OSError as exc:
+        return {"status": "error", "message": f"failed to launch dashboard: {exc}"}
+
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", dash_port), timeout=0.4):
+                DASH_PID_FILE.write_text(str(proc.pid))
+                DASH_PORT_FILE.write_text(str(dash_port))
+                return {
+                    "status": "started",
+                    "pid": proc.pid,
+                    "port": dash_port,
+                    "url": f"http://127.0.0.1:{dash_port}",
+                    "message": f"Dashboard running at http://127.0.0.1:{dash_port}",
+                }
+        except OSError:
+            if proc.poll() is not None:
+                return {
+                    "status": "error",
+                    "message": f"dashboard exited immediately (code {proc.returncode}) — "
+                               "port already in use? Pass --dashboard-port.",
+                }
+            time.sleep(0.15)
+    return {
+        "status": "error",
+        "message": f"dashboard did not bind :{dash_port} within 8s",
+    }
+
+
+def stop_dashboard() -> dict[str, Any]:
+    """Stop the dashboard daemon (if any); the proxy is unaffected."""
+    dash_pid = _read_dash_pid()
+    if dash_pid is None or not _process_exists(dash_pid) or not _pid_matches(dash_pid, "miniproxy", "dashboard"):
+        DASH_PID_FILE.unlink(missing_ok=True)
+        DASH_PORT_FILE.unlink(missing_ok=True)
+        return {"status": "not_running", "message": "Dashboard is not running."}
+    try:
+        os.killpg(os.getpgid(dash_pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    DASH_PID_FILE.unlink(missing_ok=True)
+    DASH_PORT_FILE.unlink(missing_ok=True)
+    return {"status": "stopped", "message": f"Dashboard stopped (PID {dash_pid})."}
 
 
 def stop() -> dict[str, Any]:
     pid = _read_pid()
     if pid is None:
         return {"status": "not_running", "message": "No PID file — nothing to stop."}
-    if not _process_exists(pid):
+    if not _process_exists(pid) or not _pid_matches(pid, "mitmdump"):
         PID_FILE.unlink(missing_ok=True)
         PORT_FILE.unlink(missing_ok=True)
-        return {"status": "not_running", "message": f"PID {pid} was already dead (cleaned)."}
+        return {
+            "status": "not_running",
+            "message": f"PID {pid} was stale (dead or not mitmdump) — cleaned.",
+        }
     try:
         os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
+    except (ProcessLookupError, PermissionError, OSError):
         pass
     PID_FILE.unlink(missing_ok=True)
     PORT_FILE.unlink(missing_ok=True)
@@ -190,7 +330,7 @@ def _read_port() -> Optional[int]:
 
 def status() -> dict[str, Any]:
     pid = _read_pid()
-    if pid is None or not _process_exists(pid):
+    if pid is None or not _process_exists(pid) or not _pid_matches(pid, "mitmdump"):
         if pid is not None:
             PID_FILE.unlink(missing_ok=True)
             PORT_FILE.unlink(missing_ok=True)
@@ -202,4 +342,5 @@ def status() -> dict[str, Any]:
         "port": _read_port(),
         "db": os.environ.get("MINIPROXY_DB_PATH") or str(STATE_DIR / "proxy.db"),
         "message": f"MiniProxy is running (PID {pid}).",
+        "dashboard": _read_dash_port(),
     }

@@ -3,39 +3,59 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MiniProxy</title>
+<title>MiniProxy — Web UI</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--muted:#8b949e8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--orange:#d29922;--purple:#bc8cff;--code:#1e1e2e}
-html,body{height:100%;font:14px/1.5 -apple-system,sans-serif;background:var(--bg);color:var(--text)}
-code,pre{font-family:monospace;font-size:13px}
-.toolbar{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--surface);border-bottom:1px solid var(--border)}
-.toolbar h1{font-size:18px;font-weight:700}.toolbar h1 span{color:var(--accent)}
+:root{--bg:#0d1117;--surface:#161b22;--panel:#10151c;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--orange:#d29922;--purple:#bc8cff;--code:#0b0f14}
+html,body{height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+button{font:inherit}
+
+/* ── Header / proxy bar ─────────────────────────────────────────── */
+.toolbar{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.toolbar h1{font-size:17px;font-weight:700;white-space:nowrap}.toolbar h1 span{color:var(--accent)}
+.proxy-state{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.idot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+.idot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+.db-label{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
 .tabs{display:flex;margin-left:auto;gap:4px}
 .tab{padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;font-weight:500}
 .tab:hover{background:var(--border);color:var(--text)}
 .tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-.tab-content{display:none;padding:20px}
+.tab-content{display:none;padding:16px 20px}
 .tab-content.active{display:block}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:16px;overflow:hidden}
-.card-header{padding:10px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;color:var(--muted)}
-.card-body{padding:16px}
+
+/* ── Buttons, forms ─────────────────────────────────────────────── */
 .btn{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer;font-size:13px}
 .btn:hover{background:var(--border)}
 .btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-success{background:var(--green);color:#fff;border-color:var(--green)}
 .btn-danger{background:var(--red);color:#fff}
 .btn-sm{padding:3px 10px;font-size:12px}
-.btn:disabled{opacity:.5}
+.btn:disabled{opacity:.5;cursor:not-allowed}
 label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
-input,select,textarea{width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--code);color:var(--text);font:13px monospace;outline:none}
+input,select,textarea{width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--code);color:var(--text);font:12.5px ui-monospace,Menlo,monospace;outline:none}
 input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 textarea{min-height:80px;resize:vertical}
 .form-row{margin-bottom:12px}
 .form-row-inline{display:flex;gap:12px}.form-row-inline>*{flex:1}
+
+/* ── Live tab (mirrors the TUI) ─────────────────────────────────── */
+#filters{display:flex;gap:8px;margin-bottom:10px;align-items:center}
+#filters select{width:130px;flex:none}
+#filters input{flex:1}
+.split{display:flex;gap:12px;align-items:stretch}
+.table-pane{flex:1 1 58%;min-width:0}
+.detail-pane{flex:1 1 42%;min-width:340px;max-width:44%}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0;overflow:hidden;display:flex;flex-direction:column}
+.card-header{padding:8px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.card-body{padding:14px;overflow:auto}
+.live-table-wrap{max-height:calc(100vh - 300px);overflow:auto}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{background:var(--surface);color:var(--muted);font-size:11px;text-transform:uppercase;font-weight:600}
-tr:hover{background:rgba(88,166,255,.05)}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{background:var(--surface);color:var(--muted);font-size:10.5px;text-transform:uppercase;font-weight:600;position:sticky;top:0;z-index:1}
+tbody tr:hover{background:rgba(88,166,255,.06)}
+tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,255,.4);outline-offset:-1px}
 .log-row{cursor:pointer}
 .method{display:inline-block;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:700}
 .m-GET{color:var(--green);background:rgba(63,185,80,.15)}
@@ -43,377 +63,668 @@ tr:hover{background:rgba(88,166,255,.05)}
 .m-PUT{color:var(--orange);background:rgba(210,153,34,.15)}
 .m-DELETE{color:var(--red);background:rgba(248,81,73,.15)}
 .m-PATCH{color:var(--purple);background:rgba(188,140,255,.15)}
+.m-HEAD,.m-OPTIONS,.m-CONNECT{color:var(--muted);background:rgba(139,148,158,.15)}
 .status{font-weight:700}
 .s-2xx{color:var(--green)}.s-3xx{color:var(--purple)}.s-4xx{color:var(--orange)}.s-5xx{color:var(--red)}.s-0{color:var(--red)}
-.idot{width:10px;height:10px;border-radius:50%}
-.idot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
-.idot.off{background:var(--muted)}
-.live-log{max-height:400px;overflow-y:auto}.live-log th{position:sticky;top:0}
-.rbody{padding:12px;max-height:400px;overflow:auto;white-space:pre-wrap;font-size:12px;font-family:monospace}
-.pay-cell{max-width:200px;overflow:hidden;text-overflow:ellipsis}
-.ml-auto{margin-left:auto}.text-muted{color:var(--muted)}.text-sm{font-size:12px}
-.trunc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trunc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
+.ms-cell{color:var(--muted);font-size:12px}
+
+/* ── Detail tabs ────────────────────────────────────────────────── */
+.dtabs{display:flex;gap:2px;padding:6px 8px 0;border-bottom:1px solid var(--border)}
+.dtab{padding:5px 14px;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;background:transparent;color:var(--muted);cursor:pointer;font-size:12px;font-weight:600}
+.dtab:hover{color:var(--text)}
+.dtab.active{background:var(--panel);color:var(--text);border-color:var(--border)}
+.dpane{display:none}
+.dpane.active{display:block}
+.req-meta{padding:8px 14px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);word-break:break-all}
+.req-meta b{color:var(--text)}
+.detail-actions{display:flex;gap:8px;padding:8px 10px;border-top:1px solid var(--border);flex-wrap:wrap}
+.rbody{padding:12px;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:ui-monospace,Menlo,monospace;background:var(--code);margin:10px 14px;border:1px solid var(--border);border-radius:6px}
+.rbody-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin:10px 14px 0}
+
+/* ── Modal (Repeater) ───────────────────────────────────────────── */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+.modal-backdrop.open{display:flex}
+.modal{width:min(1100px,94vw);height:min(720px,92vh);background:var(--surface);border:1px solid var(--accent);border-radius:10px;display:flex;flex-direction:column;overflow:hidden}
+.modal-header{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border);font-weight:600}
+.modal-header .ml-auto{margin-left:auto;display:flex;gap:8px}
+.modal-body{padding:12px 16px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:10px}
+.rep-row{display:flex;gap:10px}
+.rep-row select{width:130px;flex:none}
+.rep-row input{flex:1}
+.rep-split{display:flex;gap:10px;flex:1;min-height:220px}
+.rep-split .col{flex:1;display:flex;flex-direction:column;min-width:0}
+.rep-split textarea{flex:1;min-height:120px}
+.rep-out{flex:1;overflow:auto;border:1px solid var(--border);border-radius:6px;background:var(--code);padding:12px;white-space:pre-wrap;word-break:break-word;font-size:12px}
+.text-muted{color:var(--muted)}.text-sm{font-size:12px}.ml-auto{margin-left:auto}
+.empty-note{padding:24px;text-align:center;color:var(--muted)}
+.kbd{display:inline-block;padding:1px 6px;border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;background:var(--panel);font-size:11px;font-family:ui-monospace,Menlo,monospace}
+@media (max-width: 900px){.split{flex-direction:column}.detail-pane{max-width:none}}
 </style>
 </head>
 <body>
+
 <div class="toolbar">
   <h1><span>▶</span> MiniProxy</h1>
+  <div class="proxy-state">
+    <span id="proxy-dot" class="idot"></span>
+    <span id="proxy-label">checking…</span>
+    <button class="btn btn-sm" id="proxy-toggle">Start</button>
+  </div>
+  <span id="db-label" class="db-label" title=""></span>
   <div class="tabs">
-    <button class="tab active" data-tab="proxy">Proxy</button>
+    <button class="tab active" data-tab="live">Live</button>
     <button class="tab" data-tab="log">Log</button>
     <button class="tab" data-tab="repeater">Repeater</button>
     <button class="tab" data-tab="intruder">Intruder</button>
   </div>
 </div>
 
-<!-- Proxy Tab -->
-<div class="tab-content active" id="tp">
-  <div class="intercept-bar">
-    <span id="idot" class="idot on"></span>
-    <span id="ilbl" style="font-weight:600;">Intercept: ON</span>
-    <button class="btn btn-sm ml-auto" id="tog">Toggle</button>
+<!-- ══════════ Live tab — mirrors the TUI ══════════ -->
+<div class="tab-content active" id="t-live">
+  <div id="filters">
+    <select id="filter-method">
+      <option value="">Method: All</option>
+      <option>GET</option><option>POST</option><option>PUT</option>
+      <option>DELETE</option><option>PATCH</option><option>HEAD</option>
+      <option>OPTIONS</option><option>CONNECT</option>
+    </select>
+    <select id="filter-status">
+      <option value="">Status: All</option>
+      <option value="2">2xx</option><option value="3">3xx</option>
+      <option value="4">4xx</option><option value="5">5xx</option>
+      <option value="0">Errors</option><option value="pending">Pending</option>
+    </select>
+    <input id="filter-url" placeholder="Filter by URL substring…">
   </div>
-  <div class="card">
-    <div class="card-header">Live Request Feed</div>
-    <div class="card-body live-log">
-      <table><thead><tr>
-        <th style="width:40px">#</th><th style="width:80px">Time</th>
-        <th style="width:70px">Method</th><th>URL</th><th style="width:70px">Status</th>
-      </tr></thead><tbody id="liveb">
-        <tr><td colspan="5" class="text-muted" style="text-align:center;padding:20px;">Waiting for traffic...</td></tr>
-      </tbody></table>
+  <div class="split">
+    <div class="table-pane">
+      <div class="card">
+        <div class="card-header">Captured requests</div>
+        <div class="live-table-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:56px">ID</th><th style="width:84px">Method</th>
+              <th style="width:70px">Status</th><th style="width:64px">ms</th><th>URL</th>
+            </tr></thead>
+            <tbody id="liveb">
+              <tr><td colspan="5" class="empty-note">Waiting for traffic…</td></tr>
+            </tbody>
+            </table>
+        </div>
+      </div>
+    </div>
+    <div class="detail-pane">
+      <div class="card" id="detail-card" style="height:100%">
+        <div class="req-meta" id="req-meta">Select a request…</div>
+        <div class="dtabs">
+          <button class="dtab active" data-pane="p-req">Request</button>
+          <button class="dtab" data-pane="p-resp">Response</button>
+          <button class="dtab" data-pane="p-int">Intruder</button>
+        </div>
+        <div class="card-body" style="flex:1;overflow:auto">
+          <div class="dpane active" id="p-req">
+            <div class="rbody-title">Request line &amp; headers</div>
+            <pre class="rbody" id="d-req-line" style="max-height:170px"></pre>
+            <div class="rbody-title">Body</div>
+            <pre class="rbody" id="d-req-body" style="max-height:170px"></pre>
+          </div>
+          <div class="dpane" id="p-resp">
+            <div class="rbody-title">Response headers</div>
+            <pre class="rbody" id="d-resp-h" style="max-height:170px"></pre>
+            <div class="rbody-title">Body</div>
+            <pre class="rbody" id="d-resp-b" style="max-height:240px"></pre>
+          </div>
+          <div class="dpane" id="p-int">
+            <div class="rbody-title">Intruder results for the selected request</div>
+            <div class="rbody" id="d-int" style="max-height:380px">(none yet — run one from the Intruder tab)</div>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button class="btn btn-sm btn-primary" id="d-open-rep">Repeater</button>
+          <button class="btn btn-sm" id="d-curl">Copy curl</button>
+          <button class="btn btn-sm" id="d-body">Copy body</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- Log Tab -->
-<div class="tab-content" id="tl">
-  <div class="flex mb-16"><button class="btn btn-sm ml-auto" id="ref-log">Refresh</button></div>
-  <div class="card">
-    <div class="card-header">Request History</div>
-    <div style="padding:0;">
-      <table><thead><tr>
-        <th style="width:50px">#</th><th style="width:80px">Time</th>
-        <th style="width:70px">Method</th><th>URL</th><th style="width:70px">Status</th>
-      </tr></thead><tbody id="logb">
-        <tr><td colspan="5" class="text-muted" style="text-align:center;padding:20px;">No requests.</td></tr>
-      </tbody></table>
-    </div>
+<!-- ══════════ Log tab ══════════ -->
+<div class="tab-content" id="t-log">
+  <div class="form-row" style="display:flex;justify-content:flex-end">
+    <button class="btn btn-sm" id="ref-log">Refresh</button>
   </div>
-  <div class="card" id="ldet" style="display:none;">
-    <div class="card-header">Request Details</div>
-    <div class="card-body">
-      <div class="form-row"><label>URL</label><code id="ldmu"></code></div>
-      <div class="form-row"><label>Req Headers</label><pre id="ldrh" class="rbody" style="max-height:150px;"></pre></div>
-      <div class="form-row"><label>Req Body</label><pre id="ldrb" class="rbody" style="max-height:150px;"></pre></div>
-      <div class="form-row"><label>Response <span id="ldsc"></span></label><pre id="ldrsh" class="rbody" style="max-height:150px;"></pre></div>
-      <div class="form-row"><label>Response Body</label><pre id="ldrsb" class="rbody" style="max-height:350px;"></pre></div>
+  <div class="card">
+    <div class="card-header">Request history</div>
+    <div class="live-table-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:56px">ID</th><th style="width:90px">Time</th>
+          <th style="width:84px">Method</th><th>URL</th><th style="width:70px">Status</th>
+        </tr></thead>
+        <tbody id="logb"><tr><td colspan="5" class="empty-note">No requests.</td></tr></tbody>
+      </table>
     </div>
   </div>
 </div>
 
-<!-- Repeater Tab -->
-<div class="tab-content" id="trp">
+<!-- ══════════ Repeater tab (full-size editor) ══════════ -->
+<div class="tab-content" id="t-repeater">
   <div class="card">
-    <div class="card-header">1. Select Request</div>
+    <div class="card-header">1 · Select request</div>
     <div class="card-body">
       <div class="form-row"><label>Logged request</label><select id="rsel"><option value="">-- Select --</option></select></div>
     </div>
   </div>
   <div class="card">
-    <div class="card-header">2. Edit &amp; Send</div>
+    <div class="card-header">2 · Edit &amp; send</div>
     <div class="card-body">
       <div class="form-row-inline">
-        <div class="form-row" style="flex:0 0 120px">
+        <div class="form-row" style="flex:0 0 130px">
           <label>Method</label>
-          <select id="rmet">
-            <option>GET</option><option>POST</option><option>PUT</option>
-            <option>DELETE</option><option>PATCH</option><option>HEAD</option>
-          </select>
+          <select id="rmet"><option>GET</option><option>POST</option><option>PUT</option>
+            <option>DELETE</option><option>PATCH</option><option>HEAD</option><option>OPTIONS</option></select>
         </div>
-        <div class="form-row">
-          <label>URL</label>
-          <input type="url" id="rurl" placeholder="https://target.com/api">
-        </div>
+        <div class="form-row"><label>URL</label><input id="rurl" placeholder="https://target.com/api"></div>
       </div>
       <div class="form-row"><label>Headers (one per line: Key: Value)</label><textarea id="rhed" rows="6"></textarea></div>
       <div class="form-row"><label>Body</label><textarea id="rbod" rows="8"></textarea></div>
       <button class="btn btn-primary" id="rsend">Send</button>
     </div>
   </div>
-  <div class="card" id="rresp" style="display:none;">
-    <div class="card-header">Response <span id="rsc" style="float:right;"></span></div>
+  <div class="card" id="rresp" style="display:none">
+    <div class="card-header">Response <span id="rsc" style="float:right"></span></div>
     <div class="card-body">
-      <div class="form-row"><label>Headers</label><pre id="rrh" class="rbody" style="max-height:150px;"></pre></div>
-      <div class="form-row"><label>Body</label><pre id="rrb" class="rbody"></pre></div>
+      <div class="form-row"><label>Headers</label><pre class="rbody" id="rrh" style="max-height:180px;margin:0"></pre></div>
+      <div class="form-row"><label>Body</label><pre class="rbody" id="rrb" style="max-height:320px;margin:0"></pre></div>
     </div>
   </div>
 </div>
 
-<!-- Intruder Tab -->
-<div class="tab-content" id="tin">
+<!-- ══════════ Intruder tab ══════════ -->
+<div class="tab-content" id="t-intruder">
   <div class="card">
-    <div class="card-header">1. Target</div>
+    <div class="card-header">1 · Target</div>
     <div class="card-body">
       <div class="form-row"><label>Request (use &sect;param&sect; in fields)</label><select id="isel"><option value="">-- Select --</option></select></div>
       <div class="form-row-inline">
-        <div class="form-row" style="flex:0 0 120px">
+        <div class="form-row" style="flex:0 0 130px">
           <label>Method</label>
-          <select id="imet">
-            <option>GET</option><option>POST</option><option>PUT</option>
-            <option>DELETE</option><option>PATCH</option>
-          </select>
+          <select id="imet"><option>GET</option><option>POST</option><option>PUT</option>
+            <option>DELETE</option><option>PATCH</option></select>
         </div>
-        <div class="form-row">
-          <label>URL</label>
-          <input type="text" id="iurl" placeholder="https://target.com?id=sect;fuzz&sect;">
-        </div>
+        <div class="form-row"><label>URL</label><input id="iurl" placeholder="https://target.com?id=&sect;fuzz&sect;"></div>
       </div>
       <div class="form-row"><label>Headers</label><textarea id="ihed" rows="6"></textarea></div>
-      <div class="form-row"><label>Body</label><textarea id="ibod" rows="8"></textarea></div>
+      <div class="form-row"><label>Body</label><textarea id="ibod" rows="6"></textarea></div>
     </div>
   </div>
   <div class="card">
-    <div class="card-header">2. Wordlist</div>
+    <div class="card-header">2 · Wordlist</div>
     <div class="card-body">
       <div class="form-row">
         <label>Upload .txt (one per line, max 1000)</label>
         <input type="file" id="ifile" accept=".txt">
         <span id="ifinfo" class="text-sm text-muted"></span>
       </div>
-      <button class="btn btn-danger" id="istart">Start Attack</button>
+      <button class="btn btn-danger" id="istart">Start attack</button>
     </div>
   </div>
-  <div class="card" id="ires" style="display:none;">
-    <div class="card-header">Results <span id="icnt" style="float:right;"></span></div>
-    <div style="padding:0;max-height:500px;overflow-y:auto;">
+  <div class="card" id="ires" style="display:none">
+    <div class="card-header">Results <span id="icnt" style="float:right"></span></div>
+    <div class="live-table-wrap">
       <table><thead><tr>
-        <th style="width:30px">#</th><th style=":width:70px">Payload</th>
-        <th style="width:70px">Status</th><th>URL</th><th style="width:60px">Size</th>
+        <th style="width:40px">#</th><th style="width:180px">Payload</th>
+        <th style="width:70px">Status</th><th>URL</th><th style="width:70px">Size</th>
       </tr></thead><tbody id="iresb"></tbody></table>
     </div>
   </div>
 </div>
 
+<!-- ══════════ Repeater modal (opened from the Live detail pane) ══════════ -->
+<div class="modal-backdrop" id="rep-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span>Repeater</span>
+      <span class="text-sm text-muted" id="rep-origin"></span>
+      <div class="ml-auto">
+        <button class="btn btn-sm" id="rep-close">Close (Esc)</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="rep-row">
+        <select id="m-met">
+          <option>GET</option><option>POST</option><option>PUT</option>
+          <option>DELETE</option><option>PATCH</option><option>HEAD</option><option>OPTIONS</option>
+        </select>
+        <input id="m-url" placeholder="https://target/api">
+      </div>
+      <div class="rep-split">
+        <div class="col">
+          <label>Headers</label>
+          <textarea id="m-hed" style="flex:1"></textarea>
+          <label style="margin-top:8px">Body</label>
+          <textarea id="m-bod" style="flex:1"></textarea>
+        </div>
+        <div class="col">
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn btn-sm btn-success" id="m-send">Send (Ctrl+S)</button>
+            <span class="text-sm text-muted" id="m-status"></span>
+          </div>
+          <pre class="rep-out" id="m-out" style="margin-top:8px">Response appears here…</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
-// Tab switching
-document.querySelectorAll(".tab").forEach(function(tab){
-  tab.addEventListener("click",function(){
-    document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("active");});
-    document.querySelectorAll(".tab-content").forEach(function(tc){tc.classList.remove("active");});
- tab.classList.add("active");
-    document.getElementById("t"+tab.dataset.tab.charAt(0)).classList.add("active");
-    if(tab.dataset.tab==="log"){loadLog();}
-    else if(tab.dataset.tab==="repeater"||tab.dataset.tab==="intruder"){refreshSel();}
+"use strict";
+// ── helpers ──────────────────────────────────────────────────────────
+async function api(url, opts) {
+  const r = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opts });
+  let data = null;
+  try { data = await r.json(); } catch (e) { data = { error: "bad response" }; }
+  return { ok: r.ok, status: r.status, data };
+}
+function esc(s) { if (s == null) return ""; const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function fmtH(r) {
+  if (!r) return "(none)";
+  try {
+    const o = typeof r === "string" ? JSON.parse(r) : r;
+    return Object.entries(o).map(([k, v]) => k + ": " + v).join("\n");
+  } catch (e) { return String(r); }
+}
+function parseH(text) {
+  const h = {};
+  (text || "").split("\n").forEach(line => {
+    const m = line.match(/^([^:]+):\s*(.*)$/);
+    if (m) h[m[1].trim()] = m[2].trim();
+  });
+  return h;
+}
+function scls(c) {
+  if (c === null || c === undefined || c === "") return "s-0";
+  if (c === 0) return "s-0";
+  if (c < 300) return "s-2xx";
+  if (c < 400) return "s-3xx";
+  if (c < 500) return "s-4xx";
+  return "s-5xx";
+}
+function mcl(m) { return ["GET","POST","PUT","DELETE","PATCH"].indexOf(m) >= 0 ? "m-" + m : "m-HEAD"; }
+function codeLabel(c) { return c === null || c === undefined ? "…" : (c === 0 ? "ERR" : String(c)); }
+function msLabel(v) { return (typeof v === "number") ? Math.round(v) : "—"; }
+function asCurl(e) {
+  let parts = ["curl", "-sS", "-i", "-X", (e.method || "GET").toUpperCase(), "'" + String(e.url || "").replace(/'/g, "'\\''") + "'"];
+  try {
+    const h = typeof e.headers === "string" ? JSON.parse(e.headers || "{}") : (e.headers || {});
+    Object.entries(h).forEach(([k, v]) => parts.push("-H", "'" + (k + ": " + v).replace(/'/g, "'\\''") + "'"));
+  } catch (err) {}
+  if (e.body) parts.push("--data-raw", "'" + String(e.body).replace(/'/g, "'\\''") + "'");
+  return parts.join(" ");
+}
+function copyText(text, okMsg) {
+  const done = () => toast(okMsg || "Copied");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+  } else fallbackCopy(text, done);
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch (e) { toast("Copy failed", true); }
+  ta.remove();
+}
+let toastTimer = null;
+function toast(msg, isErr) {
+  let t = document.getElementById("toast");
+  if (!t) {
+    t = document.createElement("div"); t.id = "toast";
+    t.style.cssText = "position:fixed;bottom:18px;left:50%;transform:translateX(-50%);padding:8px 18px;border-radius:6px;background:#1f6feb;color:#fff;font-size:13px;z-index:99;box-shadow:0 4px 14px rgba(0,0,0,.4)";
+    document.body.appendChild(t);
+  }
+  t.style.background = isErr ? "#b62324" : "#1f6feb";
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = "none"; }, 2200);
+}
+
+// ── tabs ─────────────────────────────────────────────────────────────
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(tc => tc.classList.remove("active"));
+    tab.classList.add("active");
+    document.getElementById("t-" + tab.dataset.tab).classList.add("active");
+    if (tab.dataset.tab === "log") loadLog();
+    if (tab.dataset.tab === "repeater" || tab.dataset.tab === "intruder") refreshSel();
   });
 });
 
-// API fetch helper
-async function api(url,opts){
-  var r=await fetch(url,{headers:{"Content-Type":"application/json"},...opts});
-  return r.json();
-}
-function scls(c){
-  if(!c||c<200)return"s-0";
-  if(c<300)return"s-2xx";
-  if(c<400)return"s-3xx";
-  if(c<500)return"s-4xx";
-  return"s-5xx";
-}
-function mcl(m){
-  if(["GET","POST","PUT","DELETE","PATCH"].indexOf(m)>=0)return"m-"+m;
-  return"m-GET";
-}
-function esc(s){
-  if(!s)return"";
-  var d=document.createElement("div");
-  d.textContent=s;
-  return d.innerHTML;
-}
-function fmtH(r){
-  if(!r)return"(none)";
-  try{
-    var o=typeof r==="string"?JSON.parse(r):r;
-    return Object.entries(o).map(function(kv){return kv[0]+": "+kv[1];}).join("\n");
-  }catch(e){return String(r);}
-}
-
-// Intercept toggle
-document.getElementById("tog").addEventListener("click",async function(){
-  var dot=document.getElementById("idot");
-  var on=dot.classList.contains("on");
-  var d=await api("/api/proxy/status",{method:"POST",body:JSON.stringify({enabled:!on})});
-  dot.className="idot "+(d.intercept_enabled?"on":"off");
-  document.getElementById("ilbl").textContent="Intercept: "+(d.intercept_enabled?"ON":"OFF");
+// ── detail tabs ──────────────────────────────────────────────────────
+document.querySelectorAll(".dtab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".dtab").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".dpane").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(btn.dataset.pane).classList.add("active");
+    if (btn.dataset.pane === "p-int") loadIntruderPane();
+  });
 });
 
-// Live feed poll
-var lastId=0;
-async function pollLive(){
-  try{
-    var s=await api("/api/proxy/status");
-    var dot=document.getElementById("idot");
-    dot.className="idot "+(s.intercept_enabled?"on":"off");
-    document.getElementById("ilbl").textContent="Intercept: "+(s.intercept_enabled?"ON":"OFF");
+// ── state ────────────────────────────────────────────────────────────
+const state = { rows: [], selectedId: null, logCache: [] };
 
-    var logs=await api("/api/logs?since="+lastId);
-    if(logs.length===0)return;
-    var tb=document.getElementById("liveb");
-    if(tb.querySelector("[colspan]"))tb.innerHTML="";
-    logs.forEach(function(l){
-      lastId=Math.max(lastId,l.id);
-      var tr=document.createElement("tr");
-      tr.className="log-row";
-      var ts=l.timestamp?l.timestamp.slice(11,19):"";
-      tr.innerHTML="<td>"+l.id+'</td><td class="text-sm text-muted">'+ts+"</td>"+
-        '<td><span class="method '+mcl(l.method)+'">'+l.method+"</span></td>"+
-        '<td class="trunc" style="max-width:500px;">'+esc(l.url)+"</td>"+
-        '<td class="status '+scls(l.response_code)+'">'+(l.response_code||"---")+"</td>";
-      tb.prepend(tr);
-    });
-  }catch(e){}
+// ── proxy bar ────────────────────────────────────────────────────────
+async function refreshProxyBar() {
+  try {
+    const { data } = await api("/api/meta");
+    const dot = document.getElementById("proxy-dot");
+    const lbl = document.getElementById("proxy-label");
+    const btn = document.getElementById("proxy-toggle");
+    if (data.proxy_running) {
+      dot.className = "idot on";
+      lbl.textContent = "proxy running :" + (data.proxy_port || "?");
+      btn.textContent = "Stop";
+    } else {
+      dot.className = "idot";
+      lbl.textContent = "proxy stopped";
+      btn.textContent = "Start";
+    }
+    if (data.db_path) {
+      const el = document.getElementById("db-label");
+      el.textContent = data.db_path;
+      el.title = data.db_path;
+    }
+  } catch (e) { /* dashboard-only mode */ }
 }
-setInterval(pollLive,2500);
-pollLive();
+document.getElementById("proxy-toggle").addEventListener("click", async () => {
+  const btn = document.getElementById("proxy-toggle");
+  btn.disabled = true;
+  const running = document.getElementById("proxy-dot").classList.contains("on");
+  const { ok, data } = await api("/api/proxy/toggle", { method: "POST", body: JSON.stringify({ action: running ? "stop" : "start" }) });
+  btn.disabled = false;
+  if (!ok || data.error) { toast(data.error || "toggle failed", true); return; }
+  toast(data.message || "done");
+  refreshProxyBar();
+});
 
-// Log tab
-document.getElementById("ref-log").addEventListener("click",loadLog);
-async function loadLog(){
-  var logs=await api("/api/logs");
-  var tb=document.getElementById("logb");
-  if(logs.length===0){
-    tb.innerHTML='<tr><td colspan="5" class="text-muted" style="text-align:center;padding:20px;">Empty</td></tr>';
+// ── live table + filters (mirrors the TUI) ───────────────────────────
+function matches(r) {
+  const m = document.getElementById("filter-method").value;
+  const s = document.getElementById("filter-status").value;
+  const u = document.getElementById("filter-url").value.trim().toLowerCase();
+  if (m && (r.method || "").toUpperCase() !== m) return false;
+  const c = r.response_code;
+  if (s === "pending") { if (c !== null && c !== undefined) return false; }
+  else if (s === "0") { if (c !== 0) return false; }
+  else if (s) { if (typeof c !== "number" || Math.floor(c / 100) !== parseInt(s, 10)) return false; }
+  if (u && String(r.url || "").toLowerCase().indexOf(u) === -1) return false;
+  return true;
+}
+function renderLive() {
+  const tb = document.getElementById("liveb");
+  const rows = state.rows.filter(matches);
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="empty-note">No matching requests — route traffic through the proxy and the feed fills up.</td></tr>';
     return;
   }
-  }
-  tb.innerHTML="";
-  logs.forEach(function(l){
-    var tr=document.createElement("tr");
-    tr.className="log-row";
-    var ts=l.timestamp?l.timestamp.slice(11,19):"";
-    tr.innerHTML="<td>"+l.id+'</td><td class="text-sm text-muted">'+ts+"</td>"+
-      '<td><span class="method '+mcl(l.method)+'">'+l.method+"</span></td>"+
-      '<td class="trunc" style="max-width:500px;">'+esc(l.url)+"</td>"+
-      '<td class="status '+scls(l.response_code)+'">'+(l.response_code||"---")+"</td>";
-    tr.addEventListener("click",function(){showDetail(l.id);});
-    tb.appendChild(tr);
+  tb.innerHTML = rows.map(r =>
+    '<tr class="log-row' + (r.id === state.selectedId ? " selected" : "") + '" data-id="' + r.id + '">' +
+    "<td>" + r.id + '</td>' +
+    '<td><span class="method ' + mcl(r.method) + '">' + esc(r.method) + "</span></td>" +
+    '<td class="status ' + scls(r.response_code) + '">' + codeLabel(r.response_code) + "</td>" +
+    '<td class="ms-cell">' + msLabel(r.total_ms) + "</td>" +
+    '<td class="trunc">' + esc(r.url) + "</td></tr>"
+  ).join("");
+  tb.querySelectorAll("tr.log-row").forEach(tr => {
+    tr.addEventListener("click", () => selectRow(parseInt(tr.dataset.id, 10)));
   });
 }
-async function showDetail(id){
-  var e=await api("/api/logs/"+id);
-  if(!e||e.errorreturn;
-  document.getElementById("ldet").style.display="block";
-  document.getElementById("ldmu").textContent=e.method+" "+e.url;
-  document.getElementById("ldrh").textContent=fmtH(e.headers);
-  document.getElementById("ldrb").textContent=e.body||"(empty)";
-  document.getElementById("ldsc").innerHTML='<span class="status '+scls(e.response_code)+'">'+(e.response_code||"---")+"</span>";
-  document.getElementById("ldrsh").textContent=fmtH(e.response_headers);
-  document.getElementById("ldrsb").textContent=e.response_body||"(empty)";
+function selectRow(id) {
+  state.selectedId = id;
+  renderLive();
+  const e = state.rows.find(x => x.id === id);
+  if (e) showDetail(e);
+  document.getElementById("d-int").textContent = "(loading…)";
+  loadIntruderPane();
 }
+async function pollLive() {
+  try {
+    const { data: rows } = await api("/api/logs?limit=200");
+    if (!Array.isArray(rows)) return;
+    state.rows = rows;
+    renderLive();
+    if (state.selectedId != null) {
+      const e = state.rows.find(x => x.id === state.selectedId);
+      if (e) showDetail(e); // refresh detail (pending rows fill in)
+    }
+    refreshProxyBar();
+  } catch (e) {}
+}
+["filter-method", "filter-status"].forEach(id =>
+  document.getElementById(id).addEventListener("change", renderLive));
+document.getElementById("filter-url").addEventListener("input", renderLive);
 
-// Shared select populator
-var logCache=[];
-async function refreshSel(){
-  var logs=await api("/api/logs");
-  logCache=logs;
-  [document.getElementById("rsel"),document.getElementById("isel")].forEach(function(sel){
-    sel.innerHTML='<option value="">-- Select --</option>';
-    logs.forEach(function(l){
-      var o=document.createElement("option");
-      o.value=l.id;
-      o.textContent="#"+l.id+" "+l.method+" "+(l.url||"").slice(0,60);
+// ── detail panes ─────────────────────────────────────────────────────
+function showDetail(e) {
+  const c = e.response_code;
+  document.getElementById("req-meta").innerHTML =
+    "<b>#" + e.id + "</b> · " + esc(e.method) + " · " +
+    '<span class="status ' + scls(c) + '">' + codeLabel(c) + "</span> · " +
+    "ttfb " + msLabel(e.ttfb_ms) + "ms · total " + msLabel(e.total_ms) + "ms · " +
+    esc(e.url);
+  document.getElementById("d-req-line").textContent =
+    (e.method || "") + " " + (e.url || "") + "\n" + fmtH(e.headers);
+  document.getElementById("d-req-body").textContent = e.body || "(empty body)";
+  if (c === null || c === undefined) {
+    document.getElementById("d-resp-h").textContent = "(pending — response not captured yet)";
+    document.getElementById("d-resp-b").textContent = "";
+  } else if (c === 0) {
+    let err = "flow error";
+    try { err = (JSON.parse(e.response_headers || "{}")._error) || err; } catch (x) {}
+    document.getElementById("d-resp-h").textContent = "(transport error: " + err + ")";
+    document.getElementById("d-resp-b").textContent = "";
+  } else {
+    document.getElementById("d-resp-h").textContent = fmtH(e.response_headers);
+    document.getElementById("d-resp-b").textContent = e.response_body || "(empty body)";
+  }
+}
+async function loadIntruderPane() {
+  const el = document.getElementById("d-int");
+  if (state.selectedId == null) { el.textContent = "(select a request first)"; return; }
+  try {
+    const { data } = await api("/api/intruder/results/" + state.selectedId);
+    if (!Array.isArray(data) || !data.length) { el.textContent = "(no intruder results for this request)"; return; }
+    el.textContent = data.map(r =>
+      "payload=" + r.payload + "  status=" + codeLabel(r.response_code) +
+      "  ttfb=" + msLabel(r.ttfb_ms) + "ms  len=" + (r.response_body || "").length
+    ).join("\n");
+  } catch (e) { el.textContent = "(failed to load intruder results)"; }
+}
+document.getElementById("d-curl").addEventListener("click", () => {
+  const e = state.rows.find(x => x.id === state.selectedId);
+  if (!e) { toast("Select a request first", true); return; }
+  copyText(asCurl(e), "curl command copied");
+});
+document.getElementById("d-body").addEventListener("click", () => {
+  const e = state.rows.find(x => x.id === state.selectedId);
+  if (!e) { toast("Select a request first", true); return; }
+  if (!e.response_body) { toast("No response body captured", true); return; }
+  copyText(e.response_body, "response body copied");
+});
+document.getElementById("d-open-rep").addEventListener("click", () => {
+  const e = state.rows.find(x => x.id === state.selectedId);
+  if (!e) { toast("Select a request first", true); return; }
+  openRepModal(e);
+});
+
+// ── repeater modal ───────────────────────────────────────────────────
+const repModal = document.getElementById("rep-modal");
+function openRepModal(e) {
+  document.getElementById("rep-origin").textContent = "#" + e.id + " · " + (e.method || "") + " " + (e.url || "");
+  document.getElementById("m-met").value = (e.method || "GET").toUpperCase();
+  document.getElementById("m-url").value = e.url || "";
+  document.getElementById("m-hed").value = fmtH(e.headers);
+  document.getElementById("m-bod").value = e.body || "";
+  document.getElementById("m-out").textContent = "Response appears here…";
+  document.getElementById("m-status").textContent = "";
+  repModal.classList.add("open");
+}
+document.getElementById("rep-close").addEventListener("click", () => repModal.classList.remove("open"));
+repModal.addEventListener("click", ev => { if (ev.target === repModal) repModal.classList.remove("open"); });
+async function sendRepeater(payload) {
+  const { ok, data } = await api("/api/repeater/send", { method: "POST", body: JSON.stringify(payload) });
+  if (!ok || data.error) {
+    document.getElementById("m-status").textContent = "";
+    document.getElementById("m-out").textContent = "Error: " + (data.error || "request failed");
+    return;
+  }
+  document.getElementById("m-status").innerHTML = 'status <span class="status ' + scls(data.status_code) + '">' + data.status_code + "</span>";
+  document.getElementById("m-out").textContent = fmtH(data.headers) + "\n\n" + (data.body || "(empty body)");
+}
+document.getElementById("m-send").addEventListener("click", () => {
+  sendRepeater({
+    method: document.getElementById("m-met").value,
+    url: document.getElementById("m-url").value.trim(),
+    headers: parseH(document.getElementById("m-hed").value),
+    body: document.getElementById("m-bod").value,
+  });
+});
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") repModal.classList.remove("open");
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s" && repModal.classList.contains("open")) {
+    ev.preventDefault();
+    document.getElementById("m-send").click();
+  }
+});
+
+// ── log tab ──────────────────────────────────────────────────────────
+async function loadLog() {
+  const { data: logs } = await api("/api/logs");
+  const tb = document.getElementById("logb");
+  if (!Array.isArray(logs) || !logs.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="empty-note">Empty</td></tr>';
+    return;
+  }
+  tb.innerHTML = logs.map(l =>
+    '<tr class="log-row" data-id="' + l.id + '">' +
+    "<td>" + l.id + '</td><td class="text-sm text-muted">' + esc((l.timestamp || "").slice(11, 19)) + "</td>" +
+    '<td><span class="method ' + mcl(l.method) + '">' + esc(l.method) + "</span></td>" +
+    '<td class="trunc">' + esc(l.url) + "</td>" +
+    '<td class="status ' + scls(l.response_code) + '">' + codeLabel(l.response_code) + "</td></tr>"
+  ).join("");
+  tb.querySelectorAll("tr.log-row").forEach(tr =>
+    tr.addEventListener("click", async () => {
+      const { data: e } = await api("/api/logs/" + tr.dataset.id);
+      if (e && !e.error) { selectRow(e.id); document.querySelector('.tab[data-tab="live"]').click(); }
+    }));
+}
+document.getElementById("ref-log").addEventListener("click", loadLog);
+
+// ── shared select populator (repeater/intruder tabs) ─────────────────
+async function refreshSel() {
+  const { data: logs } = await api("/api/logs");
+  state.logCache = Array.isArray(logs) ? logs : [];
+  ["rsel", "isel"].forEach(id => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = '<option value="">-- Select --</option>';
+    state.logCache.forEach(l => {
+      const o = document.createElement("option");
+      o.value = l.id;
+      o.textContent = "#" + l.id + " " + l.method + " " + String(l.url || "").slice(0, 60);
       sel.appendChild(o);
     });
   });
 }
+function fillFromCache(prefix) {
+  return function () {
+    const e = state.logCache.find(x => x.id == this.value);
+    if (!e) return;
+    document.getElementById(prefix + "met").value = e.method;
+    document.getElementById(prefix + "url").value = e.url || "";
+    document.getElementById(prefix + "hed").value = fmtH(e.headers);
+    document.getElementById(prefix + "bod").value = e.body || "";
+    if (prefix === "r") document.getElementById("rresp").style.display = "none";
+    if (prefix === "i") document.getElementById("ires").style.display = "none";
+  };
+}
+document.getElementById("rsel").addEventListener("change", fillFromCache("r"));
+document.getElementById("isel").addEventListener("change", fillFromCache("i"));
 
-// Repeater
-document.getElementById("rsel").addEventListener("change",function(){
-  var e=logCache.find(function(x){return x.id==this.value;}.bind(this));
-  if(!e)return;
-  document.getElementById("rmet").value=e.method;
-  document.getElementById("rurl").value=e.url;
-  document.getElementById("rhed").value=fmtH(e.headers);
-  document.getElementById("rbod").value=e.body||"";
-  document.getElementById("rresp").style.display="none";
-});
-document.getElementById("rsend").addEventListener("click",async function(){
-  var h={};
-  document.getElementById("rhed").value.split("\n").forEach(function(line){
-    var m=line.match(/^([^:]+):\s*(.*)$/);
-    if(m)h[m[1].trim()]=m[2].trim();
+// ── repeater tab ─────────────────────────────────────────────────────
+document.getElementById("rsend").addEventListener("click", async () => {
+  const btn = document.getElementById("rsend");
+  btn.disabled = true;
+  const { ok, data } = await api("/api/repeater/send", {
+    method: "POST",
+    body: JSON.stringify({
+      method: document.getElementById("rmet").value,
+      url: document.getElementById("rurl").value.trim(),
+      headers: parseH(document.getElementById("rhed").value),
+      body: document.getElementById("rbod").value,
+    }),
   });
-  var resp=await api("/api/repeater/send",{
-    method:"POST",
-    body:JSON.stringify({
-      method:document.getElementById("rmet").value,
-      url:document.getElementById("rurl").value.trim(),
-      headers:h,
-      body:document.getElementById("rbod").value
-    })
-  });
-  if(resp.error){alert("Error: "+resp.error);return;}
-  document.getElementById("rresp").style.display="block";
-  document.getElementById("rsc").innerHTML='<span class="status '+scls(resp.status_code)+'">'+resp.status_code+"</span>";
-  document.getElementById("rrh").textContent=fmtH(resp.headers);
-  document.getElementById("rrb").textContent=resp.body||"(empty)";
+  btn.disabled = false;
+  if (!ok || data.error) { alert("Error: " + (data.error || "request failed")); return; }
+  document.getElementById("rresp").style.display = "block";
+  document.getElementById("rsc").innerHTML = '<span class="status ' + scls(data.status_code) + '">' + data.status_code + "</span>";
+  document.getElementById("rrh").textContent = fmtH(data.headers);
+  document.getElementById("rrb").textContent = data.body || "(empty)";
 });
 
-// Intruder
-document.getElementById("isel").addEventListener("change",function(){
-  var e=logCache.find(function(x){return x.id==this.value;}.bind(this));
-  if(!e)return;
-  document.getElementById("imet").value=e.method;
-  document.getElementById("iurl").value=e.url;
-  document.getElementById("ihed").value=fmtH(e.headers);
-  document.getElementById("ibod").value=e.body||"";
-  document.getElementById("ires").style.display="none";
-});
-var words=[];
-document.getElementById("ifile").addEventListener("change",function(){
-  if(!this.files||!this.files[0]){words=[];return;}
-  var r=new FileReader();
-  r.onload=function(e){
-    words=e.target.result.split("\n").map(function(w){return w.trim();}).filter(function(w){return w.length>0;});
-    document.getElementById("ifinfo").textContent=words.length+" words";
+// ── intruder tab ─────────────────────────────────────────────────────
+let words = [];
+document.getElementById("ifile").addEventListener("change", function () {
+  if (!this.files || !this.files[0]) { words = []; return; }
+  const r = new FileReader();
+  r.onload = e => {
+    words = e.target.result.split("\n").map(w => w.trim()).filter(w => w.length > 0);
+    document.getElementById("ifinfo").textContent = words.length + " words";
   };
   r.readAsText(this.files[0]);
 });
-document.getElementById("istart").addEventListener("click",async function(){
-  var rid=document.getElementById("isel").value;
-  if(!rid){alert("Select a request.");return;}
-  if(words.length===0){alert("Upload a wordlist.");return;}
-  var btn=document.getElementById("istart");
-  btn.disabled=true;btn.textContent="Running...";
-  try{
-    var d=await api("/api/intruder/start",{
-      method:"POST",
-      body:JSON.stringify({request_id:parseInt(rid),wordlist:words.slice(0,1000)})
+document.getElementById("istart").addEventListener("click", async () => {
+  const rid = document.getElementById("isel").value;
+  if (!rid) { alert("Select a request."); return; }
+  if (!words.length) { alert("Upload a wordlist."); return; }
+  const btn = document.getElementById("istart");
+  btn.disabled = true; btn.textContent = "Running…";
+  try {
+    const { ok, data } = await api("/api/intruder/start", {
+      method: "POST",
+      body: JSON.stringify({ request_id: parseInt(rid, 10), wordlist: words.slice(0, 1000) }),
     });
-    if(d.error){alert(d.error);return;}
-    showRes(d.results);
-  }catch(e){alert("Failed: "+e.message);}
-  finally{btn.disabled=false;btn.textContent="Start Attack";}
+    if (!ok || data.error) { alert(data.error || "attack failed"); return; }
+    showRes(data.results);
+    loadIntruderPane();
+  } catch (e) { alert("Failed: " + e.message); }
+  finally { btn.disabled = false; btn.textContent = "Start attack"; }
 });
-function showRes(rr){
-  document.getElementById("ires").style.display="block";
-  document.getElementById("icnt").textContent=rr.length+" requests";
-  var tb=document.getElementById("iresb");
-  tb.innerHTML="";
-  rr.forEach(function(r,i){
-    var tr=document.createElement("tr");
-    tr.style.cursor="pointer";
-    var sz=r.response_body?r.response_body.length+"B":"-";
-    tr.innerHTML="<td>"+(i+1)+'</td><td class="pay-cell">'+esc(r.payload)+"</td>"</td>"+
-      '<td class="status '+scls(r.response_code)+'">'+r.response_code+"</td>"+
-      '<td class="trunc" style="max-width:400px;">'+esc(r.url)+"</td>"+
-      "<td>"+sz+"</td>";
-    tr.addEventListener("click",function(){
-      alert("Payload: "+r.payload+"\\nStatus: "+r.response_code+"\\n\\nBody:\\n"+(r.response_body||"(empty)").slice(0,3000));
-    });
-    tb.appendChild(tr);
-  });
+function showRes(rr) {
+  document.getElementById("ires").style.display = "block";
+  document.getElementById("icnt").textContent = rr.length + " requests";
+  const tb = document.getElementById("iresb");
+  tb.innerHTML = rr.map((r, i) =>
+    '<tr class="log-row" data-i="' + i + '">' +
+    "<td>" + (i + 1) + '</td><td class="trunc" style="max-width:200px">' + esc(r.payload) + "</td>" +
+    '<td class="status ' + scls(r.response_code) + '">' + r.response_code + "</td>" +
+    '<td class="trunc" style="max-width:340px">' + esc(r.url) + "</td>" +
+    "<td>" + (r.response_body ? r.response_body.length + "B" : "-") + "</td></tr>"
+  ).join("");
+  tb.querySelectorAll("tr").forEach(tr =>
+    tr.addEventListener("click", () => {
+      const r = rr[parseInt(tr.dataset.i, 10)];
+      alert("Payload: " + r.payload + "\nStatus: " + r.response_code + "\n\nBody:\n" + (r.response_body || "(empty)").slice(0, 3000));
+    }));
 }
+
+// ── boot ─────────────────────────────────────────────────────────────
+pollLive();
+setInterval(pollLive, 2000);
+refreshProxyBar();
 </script>
 </body>
 </html>
