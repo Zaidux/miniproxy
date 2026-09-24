@@ -29,8 +29,33 @@ PID_FILE = STATE_DIR / "mitmdump.pid"
 PORT_FILE = STATE_DIR / "mitmdump.port"
 DASH_PID_FILE = STATE_DIR / "dashboard.pid"
 DASH_PORT_FILE = STATE_DIR / "dashboard.port"
+DASH_HOST_FILE = STATE_DIR / "dashboard.host"
 DEFAULT_PORT = 8080
 DEFAULT_DASH_PORT = 5000
+
+
+def _dashboard_display_host(bind_host: str) -> str:
+    """Return a browser-usable host for a dashboard URL.
+
+    ``0.0.0.0`` is a bind address, not a destination address: a browser
+    opened on a laptop or phone cannot route to the VPS's wildcard address.
+    Prefer the VPS/LAN address when exposing the dashboard, while retaining
+    loopback for the default local-only mode.
+    """
+    if bind_host not in ("0.0.0.0", "::", "*", ""):
+        return bind_host
+    try:
+        from miniproxy.connect import candidate_hosts
+
+        hosts = candidate_hosts(include_loopback=False)
+        for candidate in hosts:
+            host = str(candidate.get("host", "")).strip()
+            if not host or host.lower().startswith(("169.254.", "fe80:", "fec0:")):
+                continue
+            return host
+    except Exception:  # pragma: no cover - address discovery is best-effort
+        pass
+    return "127.0.0.1"
 
 
 def addon_path() -> Path:
@@ -313,16 +338,25 @@ def _ensure_dashboard(
     dash_pid = _read_dash_pid()
     if dash_pid is not None and _process_exists(dash_pid) and _pid_matches(dash_pid, "miniproxy", "dashboard"):
         port_running = _read_dash_port() or dash_port
+        # Prefer the bind address recorded at launch. Otherwise a later
+        # `miniproxy start` with the default loopback option would make an
+        # already-public dashboard appear to be local-only.
+        try:
+            recorded_host = DASH_HOST_FILE.read_text().strip()
+        except OSError:
+            recorded_host = ""
+        display_host = _dashboard_display_host(recorded_host or dash_host)
         return {
             "status": "already_running",
             "pid": dash_pid,
             "port": port_running,
-            "url": f"http://{dash_host}:{port_running}",
-            "message": f"Dashboard already running at http://{dash_host}:{port_running}",
+            "url": f"http://{display_host}:{port_running}",
+            "message": f"Dashboard already running at http://{display_host}:{port_running}",
         }
     if dash_pid is not None:
         DASH_PID_FILE.unlink(missing_ok=True)
         DASH_PORT_FILE.unlink(missing_ok=True)
+        DASH_HOST_FILE.unlink(missing_ok=True)
 
     resolved = _resolve_port(dash_port)
     if resolved is None:
@@ -362,16 +396,18 @@ def _ensure_dashboard(
             with socket.create_connection(("127.0.0.1", dash_port), timeout=0.4):
                 DASH_PID_FILE.write_text(str(proc.pid))
                 DASH_PORT_FILE.write_text(str(dash_port))
+                DASH_HOST_FILE.write_text(dash_host)
+                display_host = _dashboard_display_host(dash_host)
                 return {
                     "status": "started",
                     "pid": proc.pid,
                     "port": dash_port,
                     "fallback": fallback_dash,
-                    "url": f"http://{dash_host}:{dash_port}",
+                    "url": f"http://{display_host}:{dash_port}",
                     "message": (
-                        f"Dashboard running at http://{dash_host}:{dash_port}"
+                        f"Dashboard running at http://{display_host}:{dash_port}"
                         if not fallback_dash else
-                        f"Dashboard running at http://{dash_host}:{dash_port} "
+                        f"Dashboard running at http://{display_host}:{dash_port} "
                         "— requested port was busy, moved up"
                     ),
                 }
@@ -395,6 +431,7 @@ def stop_dashboard() -> dict[str, Any]:
     if dash_pid is None or not _process_exists(dash_pid) or not _pid_matches(dash_pid, "miniproxy", "dashboard"):
         DASH_PID_FILE.unlink(missing_ok=True)
         DASH_PORT_FILE.unlink(missing_ok=True)
+        DASH_HOST_FILE.unlink(missing_ok=True)
         return {"status": "not_running", "message": "Dashboard is not running."}
     try:
         os.killpg(os.getpgid(dash_pid), signal.SIGTERM)
@@ -402,6 +439,7 @@ def stop_dashboard() -> dict[str, Any]:
         pass
     DASH_PID_FILE.unlink(missing_ok=True)
     DASH_PORT_FILE.unlink(missing_ok=True)
+    DASH_HOST_FILE.unlink(missing_ok=True)
     return {"status": "stopped", "message": f"Dashboard stopped (PID {dash_pid})."}
 
 

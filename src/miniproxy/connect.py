@@ -27,13 +27,18 @@ def external_ip() -> str | None:
 
     ``socket.connect`` on a UDP socket only consults the routing table —
     nothing goes on the wire, so this works offline and never does DNS.
+    Link-local addresses (169.254.x.x, fec0::/10, fe80::/10) are skipped:
+    they are per-segment plumbing, unreachable from other devices.
     """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.5)
         try:
             s.connect(("8.8.8.8", 80))
-            return str(s.getsockname()[0])
+            ip = str(s.getsockname()[0])
+            if ip.startswith("169.254."):
+                return None  # link-local — not routable from anywhere else
+            return ip
         finally:
             s.close()
     except OSError:
@@ -58,7 +63,11 @@ def candidate_hosts(
         host = (host or "").strip()
         if not host or host in seen or host in ("0.0.0.0", "::", "*", ""):
             return
-        if not include_loopback and host in ("127.0.0.1", "localhost", "::1"):
+        if not include_loopback and (
+            host in ("localhost", "::1")
+            or host.startswith("127.")
+            or host.startswith("[::1]")
+        ):
             return
         seen.add(host)
         out.append({"host": host, "label": label})
@@ -70,7 +79,11 @@ def candidate_hosts(
     if ext:
         add(ext, "external interface (VPS / public IP)")
     try:
-        add(socket.gethostbyname(socket.gethostname()), "LAN address")
+        lan = socket.gethostbyname(socket.gethostname())
+        if not lan.startswith("169.254."):
+            add(lan, "LAN address")
+        else:  # keep the list useful even when only link-local exists
+            add(lan, "LAN address (link-local — usually device-local only)")
     except OSError:
         pass
     if include_loopback:

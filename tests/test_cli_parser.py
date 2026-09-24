@@ -65,6 +65,18 @@ class TestParserConstruction:
         with pytest.raises(SystemExit):
             cli.build_parser().parse_args(["start", "--port", "not-a-port"])
 
+    def test_dashboard_auto_port_is_resolved_before_app_run(self, monkeypatch):
+        import miniproxy.app as appmod
+
+        seen = {}
+        monkeypatch.setattr(
+            appmod.app, "run",
+            lambda **kwargs: seen.update(kwargs),
+        )
+        assert cli.main(["dashboard", "--port", "auto"]) == 0
+        assert isinstance(seen["port"], int)
+        assert 1024 <= seen["port"] <= 65535
+
 
 class TestMainDispatch:
     def test_version_prints_and_exits_zero(self, capsys, monkeypatch):
@@ -90,6 +102,76 @@ class TestMainDispatch:
         assert rc == 0
         assert calls["port"] == 8123
         assert calls["scope_hosts"] == ["*.t.example"]
+
+    def test_start_prints_pasteable_dashboard_and_connect_urls(self, monkeypatch, capsys):
+        """The URL `start` prints must be openable as-is in a browser.
+
+        Regression: output used to say only "Web UI: <url> (mirrors tui)" —
+        nothing told the user the URL is the thing to paste into the address
+        bar, nor that /connect is where you wire a *different* browser up.
+        The printed URL itself must be the dashboard root (server.py swaps a
+        wildcard bind for a detected LAN/VPS host), never 0.0.0.0 or the
+        proxy port (a browser cannot render an HTTP-proxy port).
+        """
+        import miniproxy.server as server
+
+        captured_kwargs = {}
+
+        def fake_start(**kwargs):
+            captured_kwargs.update(kwargs)
+            return {
+                "status": "started", "message": "ok", "port": 8080,
+                "dashboard": {
+                    "status": "started",
+                    "url": "http://192.168.1.20:5000",
+                    "port": 5000,
+                },
+            }
+
+        monkeypatch.setattr(server, "start", fake_start)
+        monkeypatch.setattr(
+            cli, "_dashboard_reachability_notes", lambda *a, **k: [])
+        rc = cli.main(["start"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # The exact URL to paste, labeled as such.
+        assert "Web UI: http://192.168.1.20:5000" in out
+        assert "paste this into your browser" in out
+        # Connect wizard advertised next to it.
+        assert "Connect: http://192.168.1.20:5000/connect" in out
+        # Never advertise a bind address or the proxy port as the destination.
+        assert "http://0.0.0.0" not in out
+        assert ":8080/connect" not in out
+
+    def test_start_dashboard_url_is_not_wildcard_bind(self, monkeypatch, capsys):
+        """On a VPS `start` must print a host a browser can actually route to,
+        not the 0.0.0.0 bind address that made the page blank."""
+        import miniproxy.server as server
+
+        monkeypatch.setattr(
+            server, "start",
+            lambda **kwargs: {
+                "status": "started", "message": "ok", "port": 8080,
+                "dashboard": {"status": "started", "url": "http://0.0.0.0:5000"},
+            },
+        )
+        rc = cli.main(["start"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "http://0.0.0.0" not in out, (
+            "startup must never tell a user to paste a bind address")
+
+    def test_start_without_dashboard_skips_url_lines(self, monkeypatch, capsys):
+        import miniproxy.server as server
+
+        monkeypatch.setattr(
+            server, "start",
+            lambda **kwargs: {"status": "started", "message": "ok", "port": 8080},
+        )
+        assert cli.main(["start", "--no-dashboard"]) == 0
+        out = capsys.readouterr().out
+        assert "Web UI:" not in out
+        assert "Connect:" not in out
 
     def test_stop_dispatches_both_stops(self, monkeypatch):
         import miniproxy.server as server

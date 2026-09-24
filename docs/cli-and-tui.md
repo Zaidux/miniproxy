@@ -37,7 +37,8 @@ Output:
 
 ```
 MiniProxy started on :8080 (PID 12345, db=/home/you/.miniproxy/proxy.db)
-Web UI: http://127.0.0.1:5000  (mirrors `miniproxy tui`)
+Web UI: http://127.0.0.1:5000   ← paste this into your browser to use MiniProxy (mirrors `miniproxy tui`)
+Connect: http://127.0.0.1:5000/connect   — wizard to route any other browser/device through the proxy
 ```
 
 The dashboard listens on `127.0.0.1` by default. Binding it to a LAN
@@ -155,7 +156,7 @@ Same semantics as the Repeater (no redirects, self-signed certs allowed,
 ```bash
 miniproxy status
 # MiniProxy is running (PID 12345).
-# Web UI: http://127.0.0.1:5000
+# Web UI: http://127.0.0.1:5000   ← paste into a browser on this machine
 
 miniproxy stop
 # MiniProxy terminated (PID 12345).

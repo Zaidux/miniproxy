@@ -61,6 +61,33 @@ System Settings, or pick another port:
 miniproxy start --dashboard-port 5050
 ```
 
+## The VPS prints a URL but the browser shows nothing
+
+`0.0.0.0` is only a bind address; it is not a destination you can type into
+another device. When the dashboard is exposed with
+`--dashboard-host 0.0.0.0`, MiniProxy now prints the VPS/LAN address it
+discovered (for example, `http://203.0.113.7:5000`) instead of the wildcard.
+If the output still says `127.0.0.1`, the dashboard is loopback-only and the
+browser must reach it through SSH:
+
+```bash
+ssh -N -L 5000:127.0.0.1:5000 user@your-vps
+# then open http://127.0.0.1:5000/connect on your laptop
+```
+
+For direct remote access, explicitly expose the dashboard and use a token:
+
+```bash
+miniproxy stop
+miniproxy start --dashboard-host 0.0.0.0 --dashboard-token 'use-a-long-secret'
+```
+
+Open the **printed** `http://<vps-ip>:<port>/connect` URL, not
+`http://0.0.0.0:<port>`, and allow both the dashboard and proxy ports in the
+VPS provider firewall/security group. If the printed address is still
+`127.0.0.1`, the machine has no discoverable non-loopback address; use the SSH
+tunnel above or provide a public DNS name/forwarded port.
+
 ## Web UI shows "proxy stopped" but traffic flows
 
 They're independent processes. The header reflects the *capture proxy*

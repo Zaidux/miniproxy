@@ -61,4 +61,5 @@ def _isolate_home(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(servermod, "PORT_FILE", state / "mitmdump.port")
     monkeypatch.setattr(servermod, "DASH_PID_FILE", state / "dashboard.pid")
     monkeypatch.setattr(servermod, "DASH_PORT_FILE", state / "dashboard.port")
+    monkeypatch.setattr(servermod, "DASH_HOST_FILE", state / "dashboard.host")
     yield

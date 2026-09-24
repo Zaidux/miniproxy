@@ -19,7 +19,8 @@ way to get traffic into the capture DB.
 ```bash
 miniproxy start
 # MiniProxy started on :8080 (PID 12345, db=/home/you/.miniproxy/proxy.db)
-# Web UI: http://127.0.0.1:5000  (mirrors `miniproxy tui`)
+# Web UI: http://127.0.0.1:5000   ← paste this into your browser to use MiniProxy (mirrors `miniproxy tui`)
+# Connect: http://127.0.0.1:5000/connect   — wizard to route any other browser/device through the proxy
 ```
 
 The proxy listens on **all interfaces** (`:8080`), so other devices can reach
@@ -273,8 +274,10 @@ Pointing a browser that lives on *another* network directly at the VPS:
 miniproxy start --dashboard-host 0.0.0.0 --dashboard-token <random> 
 ```
 
-Open `http://<vps-ip>:5000/connect` from anywhere; the wizard detects the
-public IP and prints matching proxy/PAC/CA URLs. ⚠️ **This exposes the
+Open the **printed** `http://<vps-ip>:<dashboard-port>/connect` from anywhere;
+`0.0.0.0` is a bind address, not a browser destination, so MiniProxy replaces
+it with the detected VPS/LAN address in the startup URL. The wizard detects
+the public IP and prints matching proxy/PAC/CA URLs. ⚠️ **This exposes the
 dashboard to the internet.** Keep the token, firewall the port if you can,
 and `miniproxy stop` when done. Prefer Pattern A unless you specifically need
 direct reachability (e.g. a phone without an SSH client).

@@ -158,22 +158,43 @@ class TestDashboardLifecycle:
         r = srv.stop_dashboard()
         assert r["status"] == "not_running"
 
-    def test_dashboard_url_reports_configured_host(self, state, monkeypatch):
+    def test_dashboard_url_uses_reachable_host_for_wildcard_bind(self, state, monkeypatch):
         # already-running path just reports the recorded port — use a real
         # sleeping python child whose cmdline contains "miniproxy dashboard"
         # so the pid guard accepts it.
         import time
+        from miniproxy import connect
 
+        monkeypatch.setattr(
+            connect, "candidate_hosts",
+            lambda **kwargs: [{"host": "203.0.113.7", "label": "test"}],
+        )
         proc = subprocess.Popen(
             ["python3", "-c", "# miniproxy dashboard\nimport time; time.sleep(30)"],
         )
         try:
             time.sleep(0.2)
+            srv.DASH_HOST_FILE.parent.mkdir(parents=True, exist_ok=True)
             srv.DASH_PID_FILE.write_text(str(proc.pid))
             srv.DASH_PORT_FILE.write_text("5599")
-            r = srv._ensure_dashboard(None, 5599, dash_host="0.0.0.0")
+            srv.DASH_HOST_FILE.write_text("0.0.0.0")
+            r = srv._ensure_dashboard(None, 5599, dash_host="127.0.0.1")
             assert r["status"] == "already_running", r
-            assert r["url"] == "http://0.0.0.0:5599"
+            assert r["url"] == "http://203.0.113.7:5599"
         finally:
             proc.kill()
             proc.wait()
+
+    def test_dashboard_url_keeps_loopback_for_local_bind(self, state, monkeypatch):
+        from miniproxy import connect
+
+        monkeypatch.setattr(
+            connect, "candidate_hosts",
+            lambda **kwargs: [{"host": "203.0.113.7", "label": "test"}],
+        )
+        assert srv._dashboard_display_host("127.0.0.1") == "127.0.0.1"
+        monkeypatch.setattr(
+            connect, "candidate_hosts",
+            lambda **kwargs: [{"host": "169.254.10.20", "label": "link-local"}],
+        )
+        assert srv._dashboard_display_host("0.0.0.0") == "127.0.0.1"

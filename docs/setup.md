@@ -80,7 +80,8 @@ You'll see:
 
 ```
 MiniProxy started on :8080 (PID 12345, db=/home/you/.miniproxy/proxy.db)
-Web UI: http://127.0.0.1:5000  (mirrors `miniproxy tui`)
+Web UI: http://127.0.0.1:5000   ← paste this into your browser to use MiniProxy (mirrors `miniproxy tui`)
+Connect: http://127.0.0.1:5000/connect   — wizard to route any other browser/device through the proxy
 ```
 
 `miniproxy start` starts **two** processes:

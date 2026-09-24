@@ -21,6 +21,74 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from urllib.parse import urlsplit, urlunsplit
+
+
+def _pasteable_dashboard_url(url: str) -> str:
+    """Defend the paste-ability contract at print time.
+
+    server.py already swaps a wildcard bind (``0.0.0.0``) for a detected
+    LAN/VPS host; this last-mile check covers any other code path that
+    might hand back a bind address. ``0.0.0.0`` is a bind address, not a
+    destination — pasting it into a browser is what produced the infamous
+    "printed a URL but the page is blank" VPS report.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if (parts.hostname or "") not in ("0.0.0.0", "::", "*"):
+        return url
+    try:
+        from miniproxy import connect as connect_helpers
+
+        for candidate in connect_helpers.candidate_hosts(include_loopback=False):
+            host = str(candidate.get("host", "")).strip()
+            if host and not host.lower().startswith(("169.254.", "fe80:", "fec0:")):
+                netloc = f"{host}:{parts.port}" if parts.port else host
+                return urlunsplit(
+                    (parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception:  # pragma: no cover - best-effort guard
+        pass
+    # No discoverable address: fall back to loopback, mirroring
+    # server._dashboard_display_host. The printed reachability notes then
+    # point at the SSH tunnel / explicit-exposure steps for other devices.
+    netloc = f"127.0.0.1:{parts.port}" if parts.port else "127.0.0.1"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def _dashboard_reachability_notes(dash_host: str, dash_port: int | str) -> list[str]:
+    """Human guidance about where the dashboard URL actually works.
+
+    The #1 remote-setup confusion (seen on a real VPS): the CLI prints
+    ``Web UI: http://127.0.0.1:5000``, the user opens it on their *phone*,
+    and 127.0.0.1 there is the phone itself — ERR_CONNECTION_REFUSED. Say
+    which device the URL belongs to and how to reach it from others.
+    """
+    if dash_host in ("127.0.0.1", "localhost", "::1"):
+        return [
+            "ℹ  That URL works only on the machine running miniproxy — "
+            "127.0.0.1 on your phone/laptop is that device, not this one.",
+            "   From another device:  ssh -L "
+            f"{dash_port}:127.0.0.1:{dash_port} user@<vps>  "
+            f"then open http://127.0.0.1:{dash_port} on YOUR machine, or",
+            "   expose it:  miniproxy stop && miniproxy start "
+            f"--dashboard-host 0.0.0.0 --dashboard-token <secret>"
+            f"  →  http://<vps-ip>:{dash_port}/connect",
+        ]
+    notes: list[str] = []
+    try:
+        from miniproxy import connect as connect_helpers
+
+        hosts = connect_helpers.candidate_hosts(include_loopback=False)
+        if hosts:
+            notes.append(
+                f"ℹ  From any device:  http://{hosts[0]['host']}:{dash_port}/connect"
+                "  (make sure this port is open in the VPS firewall/security group)."
+            )
+    except Exception:  # pragma: no cover - guidance is best-effort
+        pass
+    return notes
 
 
 def _port_arg(value: str) -> int | str:
@@ -182,7 +250,19 @@ def main(argv: list[str] | None = None) -> int:
             print("ℹ  Requested port was busy — the proxy took :%s instead. "
                   "Point clients at this port." % result.get("port"))
         if result.get("dashboard"):
-            print(f"Web UI: {result['dashboard']['url']}  (mirrors `miniproxy tui`)")
+            dash_url = _pasteable_dashboard_url(result["dashboard"]["url"])
+            # The URL a user is told to paste must open the web UI, not be a
+            # bind address (0.0.0.0) or the proxy port (8080) — the proxy
+            # speaks CONNECT/HTTP-proxy, which a browser address bar cannot
+            # render. server.py already swaps wildcard binds for a detected
+            # LAN/VPS address; here we make the paste-ability explicit.
+            print(f"Web UI: {dash_url}   ← paste this into your browser to use "
+                  "MiniProxy (mirrors `miniproxy tui`)")
+            print(f"Connect: {dash_url.rstrip('/')}/connect   — wizard to route "
+                  "any other browser/device through the proxy")
+            for note in _dashboard_reachability_notes(
+                    dash_host, dash.get("port", args.dashboard_port)):
+                print(note)
         return 0 if result["status"] in ("started", "already_running") else 1
 
     if args.command == "stop":
@@ -200,7 +280,10 @@ def main(argv: list[str] | None = None) -> int:
         print(result["message"])
         dash_port = result.get("dashboard")
         if result["status"] == "running" and dash_port:
-            print(f"Web UI: http://127.0.0.1:{dash_port}")
+            print(f"Web UI: http://127.0.0.1:{dash_port}   "
+                  "← paste into a browser on this machine")
+            print("   (loopback — reachable only from the VPS itself; see `miniproxy "
+                  "connect` for other devices)")
         return 0 if result["status"] == "running" else 1
 
     if args.command == "dashboard":
@@ -215,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.host not in ("127.0.0.1", "localhost"):
             print("⚠  Dashboard is LAN-exposed: captures contain tokens, cookies "
                   "and session data. Pass --token to require auth.")
-        appmod.app.run(host=args.host, port=args.port, debug=False)
+        appmod.app.run(host=args.host, port=dash_port, debug=False)
         return 0
 
     if args.command == "connect":
