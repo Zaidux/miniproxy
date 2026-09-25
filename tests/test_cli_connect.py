@@ -74,13 +74,26 @@ class TestTuiConnectScreen:
             async with app.run_test() as pilot:
                 await pilot.pause()
                 await pilot.press("w")
-                await pilot.pause()
+                # A single pause() is a race: the screen stack swap and the
+                # widget render are separate scheduled steps. Poll until the
+                # transition actually lands instead of assuming one tick.
+                for _ in range(100):
+                    await pilot.pause()
+                    if isinstance(app.screen, ConnectScreen):
+                        break
                 assert isinstance(app.screen, ConnectScreen)
                 viewer = app.screen.query_one("#connect-viewer")
+                for _ in range(100):
+                    await pilot.pause()
+                    if viewer._last_renderable is not None:
+                        break
                 assert viewer._last_renderable is not None
                 assert "proxy.pac" in str(viewer._last_renderable)
                 await pilot.press("escape")
-                await pilot.pause()
+                for _ in range(100):
+                    await pilot.pause()
+                    if not isinstance(app.screen, ConnectScreen):
+                        break
                 assert not isinstance(app.screen, ConnectScreen)
 
         asyncio.run(main())

@@ -104,8 +104,16 @@ class TestTokenAuth:
         assert client.post("/api/clear", headers={"X-MiniProxy-Token": "sekret"}).status_code == 200
 
     def test_token_via_query_param(self, tokened_client, seeded_db):
-        assert tokened_client.post("/api/proxy/toggle?token=sekret",
-                                   json={"action": "start"}).status_code in (200, 503)
+        try:
+            assert tokened_client.post("/api/proxy/toggle?token=sekret",
+                                       json={"action": "start"}).status_code in (200, 503)
+        finally:
+            # Starting spawns a real mitmdump. Without this stop the process
+            # outlives the suite, and enough leaked runs exhaust the port
+            # range — which then fails unrelated port/proxy tests in later
+            # runs, looking like flaky random failures.
+            tokened_client.post("/api/proxy/toggle?token=sekret",
+                                json={"action": "stop"})
 
     def test_reads_stay_open(self, tokened_client, seeded_db):
         assert tokened_client.get("/api/logs").status_code == 200

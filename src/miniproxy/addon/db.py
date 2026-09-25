@@ -43,6 +43,7 @@ class Database:
         self.max_db_bytes = max_db_bytes if max_db_bytes is not None else int(os.environ.get("MINIPROXY_MAX_DB_BYTES", DEFAULT_MAX_DB_BYTES))
         self.max_body_bytes = int(os.environ.get("MINIPROXY_MAX_BODY_BYTES", MAX_BODY_BYTES))
         self._init_db()
+        self._harden_perms()
         # Prune at most once per interval — running it inside store_request
         # put DELETEs (and, when over the size cap, a full VACUUM) into the
         # capture hot path, stalling the proxy and risking lock contention.
@@ -56,6 +57,33 @@ class Database:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
+
+    def _harden_perms(self) -> None:
+        """Restrict the capture DB (and its WAL/SHM siblings) to owner-only.
+
+        Capture DBs hold full request/response bodies — session cookies, auth
+        headers, credentials in transit. SQLite creates them with the process
+        umask (commonly 0644), readable by every local account. This is
+        idempotent: it also repairs DBs created before the hardening landed.
+        Best-effort only — Windows and read-only mounts must not break capture.
+        """
+        import stat as _stat
+
+        # The containing directory is the real boundary: at 0700 no other
+        # local account can traverse into it, so the WAL/SHM siblings are
+        # protected even before they exist (they are created on first write,
+        # after this runs).
+        try:
+            os.chmod(os.path.dirname(self.db_path) or ".", 0o700)
+        except OSError:
+            pass
+        for suffix in ("", "-wal", "-shm"):
+            path = f"{self.db_path}{suffix}"
+            try:
+                if os.path.exists(path):
+                    os.chmod(path, _stat.S_IRUSR | _stat.S_IWUSR)
+            except OSError:
+                continue
 
     def _init_db(self) -> None:
         conn = self._connect()

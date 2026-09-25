@@ -605,7 +605,13 @@ class MiniProxyTUI(App[None]):
             self.log(f"proxy status failed: {exc}")
             return
         self._proxy_status_text = st["status"]
-        label = self.query_one("#proxy-status", Static)
+        # This runs from a periodic timer and from a worker-thread callback,
+        # so it can fire while the screen is mid-compose or being torn down.
+        # A missing label is a benign race, not an error worth propagating.
+        try:
+            label = self.query_one("#proxy-status", Static)
+        except Exception:
+            return
         if st["status"] == "running":
             label.update(
                 f"[b]proxy[/b] [green]running[/green] :{st.get('port')} (pid {st.get('pid')})"
