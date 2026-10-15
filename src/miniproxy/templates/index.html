@@ -32,6 +32,7 @@ button{font:inherit}
 .btn-success{background:var(--green);color:#fff;border-color:var(--green)}
 .btn-danger{background:var(--red);color:#fff}
 .btn-sm{padding:3px 10px;font-size:12px}
+.inline-pick{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
 input,select,textarea{width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--code);color:var(--text);font:12.5px ui-monospace,Menlo,monospace;outline:none}
@@ -108,7 +109,8 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
 .export-menu button:hover{background:rgba(88,166,255,.12)}
 .export-menu button:disabled{opacity:.45;cursor:not-allowed}
 .export-menu hr{border:none;border-top:1px solid var(--border);margin:4px 0}
-.export-menu .danger{color:var(--red)}
+.btn-clear{color:var(--red);border-color:rgba(248,81,73,.45);margin-left:6px}
+.btn-clear:hover{background:rgba(248,81,73,.14);border-color:var(--red)}
 @media (max-width: 900px){.split{flex-direction:column}.detail-pane{max-width:none}}
 
 /* ── Connect tab ─────────────────────────────────────────────────── */
@@ -160,9 +162,8 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
       <button data-x="json">MiniProxy JSON (.json)</button>
       <button data-x="db">SQLite snapshot (.db)</button>
       <button data-x="body" id="export-body-btn" disabled>Selected response body</button>
-      <hr>
-      <button id="clear-btn" class="danger">Clear all captures…</button>
     </div>
+    <button class="btn btn-sm btn-clear" id="clear-btn" title="Delete all captured requests and intruder results">Clear captures</button>
   </div>
 </div>
 
@@ -182,6 +183,7 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
       <option value="0">Errors</option><option value="pending">Pending</option>
     </select>
     <input id="filter-url" placeholder="Filter by URL substring…">
+    <input id="filter-id" placeholder="ID: 42, 1-20, 7" title="Capture ids — comma/space separated, ranges allowed (e.g. 42, 100-200)">
   </div>
   <div class="split">
     <div class="table-pane">
@@ -294,7 +296,13 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
   <div class="card">
     <div class="card-header">1 · Target</div>
     <div class="card-body">
-      <div class="form-row"><label>Request (use &sect;param&sect; in fields)</label><select id="isel"><option value="">-- Select --</option></select></div>
+      <div class="form-row"><label>Request (use &sect;param&sect; in fields)</label>
+        <div class="inline-pick">
+          <button class="btn" id="isel-btn" type="button">Pick a captured request…</button>
+          <span class="text-sm text-muted" id="isel-label">No request selected</span>
+          <input type="hidden" id="isel" value="">
+        </div>
+      </div>
       <div class="form-row-inline">
         <div class="form-row" style="flex:0 0 130px">
           <label>Method</label>
@@ -395,6 +403,59 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
       <div class="card-header">Scan from a phone</div>
       <div class="card-body" style="display:flex;align-items:center;justify-content:center;gap:14px">
         <div class="qr-wrap"><img id="c-qr" alt="QR code of the connect page" hidden></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ Capture picker modal (Intruder: choose a request to fuzz) ══════════ -->
+<div class="modal-backdrop" id="pick-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span>Pick a captured request</span>
+      <span class="text-sm text-muted" id="pick-count"></span>
+      <div class="ml-auto">
+        <button class="btn btn-sm" id="pick-close">Close (Esc)</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="rep-row">
+        <select id="pk-method">
+          <option value="">Any method</option>
+          <option>GET</option><option>POST</option><option>PUT</option>
+          <option>DELETE</option><option>PATCH</option><option>HEAD</option>
+          <option>OPTIONS</option><option>CONNECT</option>
+        </select>
+        <select id="pk-status">
+          <option value="">Any status</option>
+          <option value="2">2xx</option><option value="3">3xx</option>
+          <option value="4">4xx</option><option value="5">5xx</option>
+          <option value="0">Errors</option><option value="pending">Pending</option>
+        </select>
+        <input id="pk-url" placeholder="URL contains…">
+        <input id="pk-id" placeholder="ID: 42, 1-20, 7" style="max-width:190px">
+      </div>
+      <div class="form-row-inline" style="gap:8px;align-items:center">
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+          <input type="checkbox" id="pk-seeded" checked> Use the Live tab filters
+        </label>
+        <button class="btn btn-sm" id="pk-refresh">Apply</button>
+        <span class="text-sm text-muted">Click a row, then Use it.</span>
+      </div>
+      <div class="live-table-wrap" style="flex:1">
+        <table>
+          <thead><tr>
+            <th style="width:56px">ID</th><th style="width:84px">Method</th>
+            <th style="width:70px">Status</th><th>URL</th>
+          </tr></thead>
+          <tbody id="pk-rows">
+            <tr><td colspan="4" class="empty-note">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-sm btn-primary" id="pick-use" disabled>Use it</button>
+        <span class="text-sm text-muted" id="pick-sel">Nothing selected</span>
       </div>
     </div>
   </div>
@@ -558,9 +619,11 @@ function restoreSession() {
     const fm = localStorage.getItem("mp.filter.method");
     const fs = localStorage.getItem("mp.filter.status");
     const fu = localStorage.getItem("mp.filter.url");
+    const fi = localStorage.getItem("mp.filter.id");
     if (fm) document.getElementById("filter-method").value = fm;
     if (fs) document.getElementById("filter-status").value = fs;
     if (fu) document.getElementById("filter-url").value = fu;
+    if (fi) document.getElementById("filter-id").value = fi;
     const sid = parseInt(localStorage.getItem("mp.selected"), 10);
     if (sid) state.selectedId = sid;  // validated once rows load
   } catch (e) { /* storage unavailable — defaults are fine */ }
@@ -601,16 +664,52 @@ document.getElementById("proxy-toggle").addEventListener("click", async () => {
 });
 
 // ── live table + filters (mirrors the TUI) ───────────────────────────
+// Single source of truth for the capture filters. The Live tab, the count
+// header, the export menu and the Intruder request picker all build their
+// query string from here, so they can never disagree about what "the
+// current filter" means.
+function filterValues() {
+  return {
+    method: document.getElementById("filter-method").value,
+    status: document.getElementById("filter-status").value,
+    url: document.getElementById("filter-url").value.trim(),
+    id: document.getElementById("filter-id").value.trim(),
+  };
+}
+function filtersQ(extra) {
+  const v = filterValues();
+  const p = new URLSearchParams();
+  if (v.method) p.set("method", v.method);
+  if (v.status) p.set("status", v.status);
+  if (v.url) p.set("url", v.url);
+  if (v.id) p.set("id", v.id);
+  if (extra) for (const [k, val] of Object.entries(extra)) p.set(k, val);
+  return p.toString();
+}
+// Client-side twin of the SQL id filter (db.parse_id_filter): exact ids,
+// inclusive ranges, comma/space separated. Kept in sync deliberately so the
+// live table reacts instantly while the server stays authoritative.
+function idMatches(idFilter, id) {
+  if (!idFilter) return true;
+  const toks = String(idFilter).split(/[,\s]+/).filter(Boolean);
+  for (const tok of toks) {
+    const rng = tok.match(/^(\d{1,18})-(\d{1,18})$/);
+    if (rng) {
+      const lo = Math.min(+rng[1], +rng[2]), hi = Math.max(+rng[1], +rng[2]);
+      if (id >= lo && id <= hi) return true;
+    } else if (/^\d{1,18}$/.test(tok) && id === +tok) return true;
+  }
+  return false;
+}
 function matches(r) {
-  const m = document.getElementById("filter-method").value;
-  const s = document.getElementById("filter-status").value;
-  const u = document.getElementById("filter-url").value.trim().toLowerCase();
-  if (m && (r.method || "").toUpperCase() !== m) return false;
+  const v = filterValues();
+  if (v.method && (r.method || "").toUpperCase() !== v.method) return false;
   const c = r.response_code;
-  if (s === "pending") { if (c !== null && c !== undefined) return false; }
-  else if (s === "0") { if (c !== 0) return false; }
-  else if (s) { if (typeof c !== "number" || Math.floor(c / 100) !== parseInt(s, 10)) return false; }
-  if (u && String(r.url || "").toLowerCase().indexOf(u) === -1) return false;
+  if (v.status === "pending") { if (c !== null && c !== undefined) return false; }
+  else if (v.status === "0") { if (c !== 0) return false; }
+  else if (v.status) { if (typeof c !== "number" || Math.floor(c / 100) !== parseInt(v.status, 10)) return false; }
+  if (v.url && String(r.url || "").toLowerCase().indexOf(v.url.toLowerCase()) === -1) return false;
+  if (!idMatches(v.id, r.id)) return false;
   return true;
 }
 function renderLive() {
@@ -644,7 +743,10 @@ function selectRow(id) {
 }
 async function pollLive() {
   try {
-    const { data: rows } = await api("/api/logs?limit=200");
+    // Filters go to the server too: with an id/URL filter active the
+    // unfiltered 200-row window can contain none of the rows the user
+    // actually wants, and the live table would look empty.
+    const { data: rows } = await api("/api/logs?" + filtersQ({ limit: 200 }));
     if (!Array.isArray(rows)) return;
     state.rows = rows;
     renderLive();
@@ -660,9 +762,22 @@ async function pollLive() {
     saveSession("mp.filter." + id.split("-")[2], ev.target.value);
     renderLive();
   }));
+// Text filters (url + id) feed the server-side poll too, so re-query on a
+// short debounce instead of firing a request per keystroke.
+let filterDebounce = null;
+function onFilterTextInput() {
+  clearTimeout(filterDebounce);
+  filterDebounce = setTimeout(pollLive, 250);
+}
 document.getElementById("filter-url").addEventListener("input", ev => {
   saveSession("mp.filter.url", ev.target.value);
   renderLive();
+  onFilterTextInput();
+});
+document.getElementById("filter-id").addEventListener("input", ev => {
+  saveSession("mp.filter.id", ev.target.value);
+  renderLive();
+  onFilterTextInput();
 });
 
 // ── detail panes ─────────────────────────────────────────────────────
@@ -788,10 +903,12 @@ document.getElementById("ref-log").addEventListener("click", loadLog);
 
 // ── shared select populator (repeater/intruder tabs) ─────────────────
 async function refreshSel() {
-  const { data: logs } = await api("/api/logs");
+  // Populate the Repeater dropdown from the *same* filters the live table is
+  // using, so picking a request here can never offer one the live view hides.
+  const { data: logs } = await api("/api/logs?" + filtersQ({ limit: 500 }));
   state.logCache = Array.isArray(logs) ? logs : [];
-  ["rsel", "isel"].forEach(id => {
-    const sel = document.getElementById(id);
+  const sel = document.getElementById("rsel");
+  if (sel) {
     sel.innerHTML = '<option value="">-- Select --</option>';
     state.logCache.forEach(l => {
       const o = document.createElement("option");
@@ -799,7 +916,7 @@ async function refreshSel() {
       o.textContent = "#" + l.id + " " + l.method + " " + String(l.url || "").slice(0, 60);
       sel.appendChild(o);
     });
-  });
+  }
 }
 function fillFromCache(prefix) {
   return function () {
@@ -814,7 +931,107 @@ function fillFromCache(prefix) {
   };
 }
 document.getElementById("rsel").addEventListener("change", fillFromCache("r"));
-document.getElementById("isel").addEventListener("change", fillFromCache("i"));
+
+// ── Intruder request picker modal ─────────────────────────────────────
+// The Intruder used to use a bare <select> that ignored the Live tab filters
+// entirely, so you could fuzz a request the live view was hiding. It now
+// opens a modal that is seeded from those filters and can filter further,
+// including by capture id.
+const pickModal = document.getElementById("pick-modal");
+const pkRows = document.getElementById("pk-rows");
+const pkUse = document.getElementById("pick-use");
+const pkSel = document.getElementById("pick-sel");
+let pkHits = [];
+let pkChosen = null;
+
+function pkQuery() {
+  const p = new URLSearchParams();
+  const m = document.getElementById("pk-method").value;
+  const s = document.getElementById("pk-status").value;
+  const u = document.getElementById("pk-url").value.trim();
+  const i = document.getElementById("pk-id").value.trim();
+  if (m) p.set("method", m);
+  if (s) p.set("status", s);
+  if (u) p.set("url", u);
+  if (i) p.set("id", i);
+  p.set("limit", "300");
+  return p.toString();
+}
+function pkSeed() {
+  // Start from whatever the Live tab is filtered to, so the picker opens on
+  // the set the user is actually looking at.
+  const v = filterValues();
+  document.getElementById("pk-method").value = v.method || "";
+  document.getElementById("pk-status").value = v.status || "";
+  document.getElementById("pk-url").value = v.url || "";
+  document.getElementById("pk-id").value = v.id || "";
+}
+async function pkLoad() {
+  pkRows.innerHTML = '<tr><td colspan="4" class="empty-note">Loading…</td></tr>';
+  const { data, ok } = await api("/api/logs?" + pkQuery());
+  if (!ok || data.error) {
+    pkRows.innerHTML = '<tr><td colspan="4" class="empty-note">' +
+      esc(data.error || "could not load captures") + "</td></tr>";
+    document.getElementById("pick-count").textContent = "";
+    return;
+  }
+  pkHits = Array.isArray(data) ? data : [];
+  document.getElementById("pick-count").textContent = pkHits.length + " match" +
+    (pkHits.length === 1 ? "" : "es");
+  if (!pkHits.length) {
+    pkRows.innerHTML = '<tr><td colspan="4" class="empty-note">No captures match these filters.</td></tr>';
+    return;
+  }
+  pkRows.innerHTML = pkHits.map(r =>
+    '<tr class="log-row" data-id="' + r.id + '">' +
+    "<td>" + r.id + "</td>" +
+    '<td><span class="method ' + mcl(r.method) + '">' + esc(r.method) + "</span></td>" +
+    '<td class="status ' + scls(r.response_code) + '">' + codeLabel(r.response_code) + "</td>" +
+    '<td class="trunc">' + esc(r.url) + "</td></tr>"
+  ).join("");
+  pkRows.querySelectorAll("tr.log-row").forEach(tr =>
+    tr.addEventListener("click", () => pkChoose(parseInt(tr.dataset.id, 10), tr)));
+}
+function pkChoose(id, tr) {
+  pkChosen = id;
+  pkRows.querySelectorAll("tr.log-row").forEach(x => x.classList.remove("selected"));
+  if (tr) tr.classList.add("selected");
+  pkUse.disabled = false;
+  pkSel.textContent = "Selected #" + id;
+}
+function pkUseIt() {
+  if (pkChosen == null) return;
+  applyIntruderRequest(pkChosen);
+  pkModal.classList.remove("open");
+}
+function applyIntruderRequest(id) {
+  const e = pkHits.find(x => x.id === id) || state.logCache.find(x => x.id === id);
+  document.getElementById("isel").value = e ? e.id : "";
+  document.getElementById("isel-label").textContent = e
+    ? "#" + e.id + " · " + e.method + " " + String(e.url || "").slice(0, 70)
+    : "No request selected";
+  if (!e) return;
+  document.getElementById("imet").value = e.method;
+  document.getElementById("iurl").value = e.url || "";
+  document.getElementById("ihed").value = fmtH(e.headers);
+  document.getElementById("ibod").value = e.body || "";
+  document.getElementById("ires").style.display = "none";
+}
+document.getElementById("isel-btn").addEventListener("click", () => {
+  pkChosen = null;
+  pkUse.disabled = true;
+  pkSel.textContent = "Nothing selected";
+  if (document.getElementById("pk-seeded").checked) pkSeed();
+  pickModal.classList.add("open");
+  pkLoad();
+});
+document.getElementById("pick-close").addEventListener("click", () => pickModal.classList.remove("open"));
+pkUse.addEventListener("click", pkUseIt);
+document.getElementById("pk-refresh").addEventListener("click", pkLoad);
+pickModal.addEventListener("click", ev => { if (ev.target === pickModal) pickModal.classList.remove("open"); });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") pickModal.classList.remove("open"); });
+["pk-method", "pk-status"].forEach(id =>
+  document.getElementById(id).addEventListener("change", pkLoad));
 
 // ── repeater tab ─────────────────────────────────────────────────────
 document.getElementById("rsend").addEventListener("click", async () => {
@@ -910,16 +1127,9 @@ exportBtn.addEventListener("click", () => { setExportMenu(); exportMenu.classLis
 document.addEventListener("click", ev => {
   if (!exportMenu.contains(ev.target) && ev.target !== exportBtn) exportMenu.classList.remove("open");
 });
-function exportFiltersQ() {
-  const m = document.getElementById("filter-method").value;
-  const s = document.getElementById("filter-status").value;
-  const u = document.getElementById("filter-url").value.trim();
-  const p = new URLSearchParams();
-  if (m) p.set("method", m);
-  if (s) p.set("status", s);
-  if (u) p.set("url", u);
-  return p.toString();
-}
+// Exports reuse the one shared filter builder, so an export always contains
+// exactly what the live table is showing (including the id selector).
+function exportFiltersQ() { return filtersQ(); }
 exportMenu.querySelectorAll("button[data-x]").forEach(b => b.addEventListener("click", () => {
   exportMenu.classList.remove("open");
   const kind = b.dataset.x;
@@ -934,16 +1144,18 @@ function saveSelectedBody() {
 }
 document.getElementById("d-save-body").addEventListener("click", saveSelectedBody);
 document.getElementById("clear-btn").addEventListener("click", async () => {
-  exportMenu.classList.remove("open");
   if (!window.confirm("Delete ALL captured requests and intruder results?\nThis cannot be undone.")) return;
   const { ok, data } = await api("/api/clear", { method: "POST" });
   if (!ok || data.error) { toast(data.error || "clear failed", true); return; }
   toast("Cleared " + data.removed + " capture(s)");
   state.rows = [];
+  state.logCache = [];
   state.selectedId = null;
   saveSession("mp.selected", "");
   setExportMenu();
+  refreshSel();
   renderLive();
+  loadLog();
   document.getElementById("req-meta").textContent = "Select a request…";
   ["d-req-line", "d-req-body", "d-resp-h", "d-resp-b"].forEach(id => document.getElementById(id).textContent = "");
   document.getElementById("d-int").textContent = "(none yet — run one from the Intruder tab)";

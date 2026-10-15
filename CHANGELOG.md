@@ -12,6 +12,68 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-15
+
+Closes the capture DB to the world, and makes one filter definition serve
+every view.
+
+### Security
+- **The proxy is no longer published to the internet by default.** mitmdump
+  was hardcoded to `--set block_global=false` and bound every interface, so
+  on a VPS any host that could reach the port could capture *through*
+  MiniProxy and land their own traffic in your database. New
+  `--proxy-host` flag (default `127.0.0.1`) controls the bind address;
+  reach a loopback-bound proxy from another machine with
+  `ssh -L <port>:127.0.0.1:<port>`.
+  - **Breaking:** a remote browser can no longer connect at the server's
+    public IP unless you pass `--proxy-host 0.0.0.0`. Start prints a
+    reminder of the `ssh -L` form whenever the proxy is published.
+- **`--allow-client <ip>`** (repeatable) restricts the proxy port to specific
+  client IPs via mitmproxy's `allow_hosts`. Required when combining
+  `--proxy-host 0.0.0.0` with an internet-facing port; `start` warns when a
+  published port has no allowlist.
+- The startup warning for a LAN-exposed dashboard no longer fires when
+  `--dashboard-token` was actually supplied (it previously printed
+  "Pass --dashboard-token to require auth" on runs that had just passed it).
+
+### Added
+- **Capture-ID filtering, everywhere.** A shared selector accepted by the
+  Live tab, the count header, the export menu and the Intruder picker:
+  `42`, `1,5,9`, `100-200`, or any comma/space-separated mix. Multiple ids
+  are OR-ed; reversed ranges (`200-100`) are normalised; unusable input is
+  ignored rather than blanking the table or erroring. Backed by
+  `db.parse_id_filter()` (SQL) with a matching client-side implementation
+  so the live table stays instant.
+- **Intruder request picker.** The Intruder target selector was a bare
+  `<select>` that ignored the Live tab filters, so you could fuzz a request
+  the live view was hiding. It is now a modal picker seeded from those
+  filters and filterable by method, status, URL and ID, with row-click
+  selection.
+- **Visible "Clear captures" button.** Clearing was implemented and
+  reachable but buried in the `Export ▾` dropdown (`display:none` until
+  opened), so it read as missing. It now sits in the toolbar as a
+  danger-styled button.
+
+### Fixed
+- **Repeater/Intruder selectors offered deleted requests.** After
+  clearing, `state.logCache` was left populated, so the request dropdowns
+  still listed rows that no longer existed and could be replayed. The cache,
+  both selectors and the Log table are now refreshed.
+- One shared filter reader (`app._log_filters()`) now backs `/api/logs`,
+  `/api/logs/count` and every export. `exportFiltersQ()` previously rebuilt
+  the query string by hand and would silently drop any newly added filter.
+- The live poll now applies filters server-side. With an ID or URL filter
+  active, the unfiltered 200-row window could contain none of the wanted
+  rows and the table looked empty.
+- `__version__` reported `0.4.0` from a 0.5.0 install, so `/api/meta`
+  showed a version that did not match the package. All version strings are
+  pinned together by `tests/test_version.py`.
+- `_same_option()` dropped `action="append"` when copying options to the
+  `web` alias, so repeatable flags collapsed to a bare string and would
+  have been iterated one character at a time.
+
+## [0.5.0] — 2026-09-25
+
 ### Added
 - **Remote browser capture** — connect any browser, on any OS/device, from
   anywhere:
@@ -123,5 +185,7 @@ See the git history (<https://github.com/Zaidux/miniproxy/commits/main>) —
 the pre-0.4 releases were the Riciplay-bundled variant without a standalone
 changelog.
 
-[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.0
+[0.5.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.4.0

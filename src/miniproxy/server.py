@@ -27,6 +27,7 @@ from typing import Any, Optional
 STATE_DIR = Path(os.environ.get("MINIPROXY_STATE_DIR", Path.home() / ".miniproxy"))
 PID_FILE = STATE_DIR / "mitmdump.pid"
 PORT_FILE = STATE_DIR / "mitmdump.port"
+HOST_FILE = STATE_DIR / "mitmdump.host"
 DASH_PID_FILE = STATE_DIR / "dashboard.pid"
 DASH_PORT_FILE = STATE_DIR / "dashboard.port"
 DASH_HOST_FILE = STATE_DIR / "dashboard.host"
@@ -174,6 +175,33 @@ def _read_dash_port() -> Optional[int]:
         return None
 
 
+def _read_proxy_host(default: str = "127.0.0.1") -> str:
+    """Bind address the running proxy was started with (default loopback)."""
+    try:
+        val = HOST_FILE.read_text().strip()
+    except OSError:
+        return default
+    return val or default
+
+
+def _allow_hosts_args(allow_clients: Optional[list[str]]) -> list[str]:
+    """Build mitmdump ``--allow-hosts`` args from a client-IP allowlist.
+
+    mitmdump refuses to start when ``allow_hosts`` is non-empty and no rule
+    matches, so this both fences off an open proxy and fails loudly rather
+    than silently capturing nothing.
+    """
+    if isinstance(allow_clients, str):
+        # Tolerate a single IP passed straight through from the CLI.
+        allow_clients = [allow_clients]
+    hosts = [str(h).strip() for h in (allow_clients or []) if str(h).strip()]
+    if not hosts:
+        return []
+    # One --set flag keeps every entry inside a single allow_hosts value
+    # (mitmproxy takes it as a comma-separated list).
+    return ["--set", "allow_hosts=" + ",".join(hosts)]
+
+
 def start(
     *,
     port: int | str = DEFAULT_PORT,
@@ -187,6 +215,8 @@ def start(
     dash_host: str = "127.0.0.1",
     dash_token: Optional[str] = None,
     with_dashboard: Optional[bool] = None,
+    allow_clients: Optional[list[str]] = None,
+    proxy_host: str = "127.0.0.1",
 ) -> dict[str, Any]:
     """Start the interception proxy as a background subprocess.
 
@@ -213,6 +243,19 @@ def start(
                        pass 0.0.0.0 explicitly to expose it on the LAN).
         dash_token:    Require this token on the dashboard's mutating
                        endpoints (recommended when LAN-exposed).
+        allow_clients: Optional client-IP allowlist for the *proxy* port.
+                       The proxy is deliberately started with
+                       ``block_global=false`` (so a remote browser can use it),
+                       which makes it an open relay unless this is set: anyone
+                       who can reach the port can capture through it and fill
+                       the DB with their own traffic. Pass your client IPs to
+                       fence it off.
+        proxy_host:   Bind address for the *proxy* port. Defaults to
+                       ``127.0.0.1`` so the proxy is NOT published to the
+                       internet by default — reach it from another machine over
+                       an SSH tunnel (``ssh -L <port>:127.0.0.1:<port> …``).
+                       Pass ``0.0.0.0`` to serve the LAN/public, and pair it
+                       with *allow_clients* or a firewall.
     """
     pid = _read_pid()
     if pid is not None and _process_exists(pid) and _pid_matches(pid, "mitmdump"):
@@ -236,6 +279,7 @@ def start(
         # Dead or recycled PID — clean the stale state and start fresh.
         PID_FILE.unlink(missing_ok=True)
         PORT_FILE.unlink(missing_ok=True)
+        HOST_FILE.unlink(missing_ok=True)
 
     script = addon_path()
     if not script.exists():
@@ -273,7 +317,8 @@ def start(
 
     cmd = (
         [mitmdump_path, "-s", str(script), "--set", "block_global=false",
-         "--listen-port", str(port)]
+         "--listen-host", proxy_host, "--listen-port", str(port)]
+        + _allow_hosts_args(allow_clients)
         + (extra_args or [])
     )
     try:
@@ -298,6 +343,7 @@ def start(
 
     PID_FILE.write_text(str(proc.pid))
     PORT_FILE.write_text(str(port))
+    HOST_FILE.write_text(proxy_host)
     scope_note = (
         f", scope={len(hosts)} host(s) (out-of-scope: "
         f"{env.get('MINIPROXY_SCOPE_MODE', 'skip')})" if hosts else ""
@@ -450,6 +496,7 @@ def stop() -> dict[str, Any]:
     if not _process_exists(pid) or not _pid_matches(pid, "mitmdump"):
         PID_FILE.unlink(missing_ok=True)
         PORT_FILE.unlink(missing_ok=True)
+        HOST_FILE.unlink(missing_ok=True)
         return {
             "status": "not_running",
             "message": f"PID {pid} was stale (dead or not mitmdump) — cleaned.",
@@ -460,6 +507,7 @@ def stop() -> dict[str, Any]:
         pass
     PID_FILE.unlink(missing_ok=True)
     PORT_FILE.unlink(missing_ok=True)
+    HOST_FILE.unlink(missing_ok=True)
     return {"status": "stopped", "message": f"MiniProxy terminated (PID {pid})."}
 
 
@@ -476,12 +524,16 @@ def status() -> dict[str, Any]:
         if pid is not None:
             PID_FILE.unlink(missing_ok=True)
             PORT_FILE.unlink(missing_ok=True)
+            HOST_FILE.unlink(missing_ok=True)
         return {"status": "not_running", "pid": None, "port": None,
-                "message": "MiniProxy is not running."}
+                "host": None, "message": "MiniProxy is not running."}
     return {
         "status": "running",
         "pid": pid,
         "port": _read_port(),
+        # Loopback unless it was explicitly published — the connect wizard
+        # uses this to know whether devices can reach the port directly.
+        "host": _read_proxy_host(),
         "db": os.environ.get("MINIPROXY_DB_PATH") or str(STATE_DIR / "proxy.db"),
         "message": f"MiniProxy is running (PID {pid}).",
         "dashboard": _read_dash_port(),

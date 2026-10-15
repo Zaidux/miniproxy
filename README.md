@@ -38,6 +38,28 @@ miniproxy stop                           # stop proxy + dashboard
 
 Then point your browser/system at `http://127.0.0.1:8080` — the dashboard's **Connect** tab (`/connect`) prints the exact settings, a one-click PAC URL, the CA download, and a QR code. HTTPS interception uses mitmproxy's CA — install it from the Connect tab or run `mitmdump` once (`~/.mitmproxy/mitmproxy-ca-cert.pem`). Capture is always on while the proxy runs; the web UI and TUI are just windows onto the same capture DB. Running the proxy on a VPS or another machine? See [docs/connect.md](docs/connect.md).
 
+### Capturing from another machine
+
+Since 0.6.0 the proxy binds `127.0.0.1` only, so it is **not** reachable from
+other machines until you say so. Forward the port over SSH instead — the
+proxy never needs a public address:
+
+```bash
+# on the client (laptop/phone), then point the browser at 127.0.0.1:8080
+ssh -N -L 8080:127.0.0.1:8080 user@your-host
+```
+
+To publish the proxy on a LAN/VPS interface instead, bind it explicitly and
+restrict who may connect:
+
+```bash
+miniproxy start --proxy-host 0.0.0.0 --allow-client 203.0.113.7
+```
+
+`--allow-client` is repeatable. Without it, a published proxy is an open
+relay: anything that can reach the port can capture through it and write to
+your database.
+
 📚 **Full documentation in [`docs/`](docs/index.md)** — [setup](docs/setup.md) · [CLI & TUI](docs/cli-and-tui.md) · [web UI](docs/web-ui.md) · [connect browsers & devices](docs/connect.md) · [integrations](docs/integrations.md) · [troubleshooting](docs/troubleshooting.md) · [code audit](docs/AUDIT.md).
 
 ```bash

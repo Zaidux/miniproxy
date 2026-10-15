@@ -119,6 +119,16 @@ def _same_option(p: argparse.ArgumentParser, flag: str) -> dict:
             }
             if action.__class__.__name__ == "_StoreTrueAction":
                 kwargs = {"action": "store_true", "help": action.help}
+            elif action.__class__.__name__ == "_AppendAction":
+                # Repeatable flags (--allow-client IP) must stay repeatable on
+                # the aliased subparser; without this they collapse to a bare
+                # string and the caller iterates it one character at a time.
+                kwargs = {
+                    "action": "append",
+                    "default": action.default,
+                    "help": action.help,
+                    "metavar": action.metavar,
+                }
             return kwargs
     return {"default": None}
 
@@ -168,10 +178,24 @@ def build_parser() -> argparse.ArgumentParser:
                               "endpoints (recommended with --dashboard-host 0.0.0.0)")
     p_start.add_argument("--no-dashboard", action="store_true",
                          help="Do not launch the web dashboard")
+    p_start.add_argument("--proxy-host", default="127.0.0.1",
+                         help="Bind address for the PROXY port "
+                              "(default 127.0.0.1 = not reachable from the "
+                              "internet; reach it via `ssh -L <port>:127.0.0.1:"
+                              "<port>`). Pass 0.0.0.0 to publish it.")
+    p_start.add_argument("--allow-client", action="append", default=None,
+                         metavar="IP",
+                         help="Restrict the PROXY port to this client IP "
+                              "(repeatable). The proxy runs with "
+                              "block_global=false so remote browsers can use "
+                              "it, which makes it an open relay otherwise — "
+                              "anyone who reaches the port captures through it. "
+                              "e.g. --allow-client 203.0.113.7")
 
     p_web = sub.add_parser("web", help="Start the proxy AND the web dashboard (alias of start)")
     for opt in ("--port", "--db", "--scope", "--mitmdump", "--dashboard-port",
-                "--dashboard-host", "--dashboard-token", "--no-dashboard"):
+                "--dashboard-host", "--dashboard-token", "--no-dashboard",
+                "--proxy-host", "--allow-client"):
         p_web.add_argument(opt, **_same_option(p_start, opt))
     p_web.add_argument("--block-out-of-scope", action="store_true")
 
@@ -237,10 +261,31 @@ def main(argv: list[str] | None = None) -> int:
             dash_port=args.dashboard_port,
             dash_host=dash_host,
             dash_token=args.dashboard_token,
+            allow_clients=getattr(args, "allow_client", None),
+            proxy_host=getattr(args, "proxy_host", "127.0.0.1"),
         )
-        if dash_host not in ("127.0.0.1", "localhost"):
-            print("⚠  Dashboard is LAN-exposed: captures contain tokens, cookies "
-                  "and session data. Pass --dashboard-token to require auth.")
+        # The proxy always runs with block_global=false so a remote browser
+        # can point at it. Combined with a non-loopback bind that is an open
+        # relay: any host that can reach the port captures through it and
+        # lands in the DB. Warn loudly rather than silently collecting
+        # someone else's traffic.
+        proxy_host = getattr(args, "proxy_host", "127.0.0.1")
+        published = proxy_host not in ("127.0.0.1", "localhost", "::1")
+        if published and not getattr(args, "allow_client", None):
+            print("⚠  Proxy port %s is published on %s with NO client "
+                  "restriction (open relay). Pass --allow-client <your-ip> "
+                  "to restrict it."
+                  % (result.get("port") or args.port, proxy_host))
+        if published:
+            print("ℹ  Proxy published on %s — remote browsers must reach it "
+                  "at <this-server>:%s. Loopback (the default) needs "
+                  "`ssh -L %s:127.0.0.1:%s` from the client."
+                  % (proxy_host, result.get("port") or args.port,
+                     result.get("port") or args.port,
+                     result.get("port") or args.port))
+        if dash_host not in ("127.0.0.1", "localhost") and not args.dashboard_token:
+            print("⚠  Dashboard is LAN-exposed with NO auth: captures contain tokens, "
+                  "cookies and session data. Pass --dashboard-token to require auth.")
         print(result["message"])
         dash = result.get("dashboard") or {}
         if dash.get("fallback"):
@@ -295,9 +340,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.token:
             os.environ["MINIPROXY_DASHBOARD_TOKEN"] = args.token
             appmod.DASHBOARD_TOKEN = args.token
-        if args.host not in ("127.0.0.1", "localhost"):
-            print("⚠  Dashboard is LAN-exposed: captures contain tokens, cookies "
-                  "and session data. Pass --token to require auth.")
+        if args.host not in ("127.0.0.1", "localhost") and not args.token:
+            print("⚠  Dashboard is LAN-exposed with NO auth: captures contain tokens, "
+                  "cookies and session data. Pass --token to require auth.")
         appmod.app.run(host=args.host, port=dash_port, debug=False)
         return 0
 

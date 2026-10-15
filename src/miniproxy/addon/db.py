@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -23,6 +24,33 @@ DEFAULT_MAX_DB_BYTES = 50 * 1024 * 1024
 MAX_BODY_BYTES = 100_000
 
 STATUS_CLASSES = {"2", "3", "4", "5", "0", "pending"}
+
+
+def parse_id_filter(raw: str) -> list[tuple[str, list[Any]]]:
+    """Translate an id-filter expression into SQL ``(clause, params)`` pairs.
+
+    Accepts a comma/space separated mix of exact ids and inclusive ranges:
+    ``"42"``, ``"1,5,9"``, ``"100-200"``, ``"42, 100-200"``.  Reversed
+    ranges (``200-100"``) are normalised rather than silently matching
+    nothing, because a user who types them backwards means "between these".
+
+    Returns ``[]`` when nothing usable was supplied, so callers can treat an
+    empty box as "no id filter" instead of erroring.
+    """
+    out: list[tuple[str, list[Any]]] = []
+    for tok in re.split(r"[,\s]+", str(raw or "").strip()):
+        if not tok:
+            continue
+        rng = re.fullmatch(r"(\d{1,18})\s*-\s*(\d{1,18})", tok)
+        if rng:
+            lo, hi = int(rng.group(1)), int(rng.group(2))
+            if lo > hi:
+                lo, hi = hi, lo
+            out.append(("id BETWEEN ? AND ?", [lo, hi]))
+            continue
+        if re.fullmatch(r"\d{1,18}", tok):
+            out.append(("id = ?", [int(tok)]))
+    return out
 
 
 class Database:
@@ -357,6 +385,7 @@ class Database:
         method: str = "",
         status_class: str = "",
         url_substr: str = "",
+        ids: str = "",
     ) -> list[dict[str, Any]]:
         """Newest-first capture listing with server-side filtering.
 
@@ -365,6 +394,8 @@ class Database:
         * ``status_class`` — ``2``..``5`` (HTTP class), ``0`` (transport
           error), ``pending`` (no response yet)
         * ``url_substr`` — case-insensitive substring
+        * ``ids`` — id selector: ``"42"``, ``"1,5,9"``, ``"100-200"`` or any
+          comma/space separated mix (see :func:`parse_id_filter`)
         """
         clauses = ["id > ?"]
         params: list[Any] = [since_id]
@@ -386,6 +417,16 @@ class Database:
         if url_substr:
             clauses.append("INSTR(LOWER(url), ?) > 0")
             params.append(url_substr.lower())
+        id_parts = parse_id_filter(ids)
+        if id_parts:
+            # OR-ed inside one parenthesised group: `"1,5,9"` must match any of
+            # them. Appending them as separate clauses would AND them together
+            # and match nothing at all.
+            clauses.append(
+                "(" + " OR ".join(c for c, _ in id_parts) + ")"
+            )
+            for _, cparams in id_parts:
+                params.extend(cparams)
         conn = self._connect()
         rows = conn.execute(
             "SELECT *, (response_code IS NOT NULL) AS has_response "

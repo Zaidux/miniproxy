@@ -98,17 +98,29 @@ def resolve_proxy_target(
     *,
     running_port: int | None = None,
     default_port: int = 8080,
+    bind_host: str | None = None,
 ) -> tuple[str, int]:
     """Resolve the proxy host:port to advertise.
 
-    Precedence: explicit override → request host → first candidate →
-    loopback; the port comes from the override, else the running proxy,
-    else *default_port*.
+    Precedence: explicit override → the proxy's own bind address →
+    request host → first candidate → loopback; the port comes from the
+    override, else the running proxy, else *default_port*.
+
+    The bind address matters: when the proxy listens on loopback only (the
+    default), no device can reach it at this server's public IP. Devices
+    must reach it on their *own* 127.0.0.1 through an SSH/local port
+    forward, so advertising the public address would hand out a PAC that
+    silently cannot connect.
     """
     host = (proxy_host or "").strip()
     if not host:
-        cands = candidate_hosts(request_host)
-        host = cands[0]["host"] if cands else "127.0.0.1"
+        bind = (bind_host or "").strip()
+        if bind and bind not in ("0.0.0.0", "::", "*"):
+            # Private/LAN binds are directly reachable; loopback is not.
+            host = bind
+        else:
+            cands = candidate_hosts(request_host)
+            host = cands[0]["host"] if cands else "127.0.0.1"
     port = proxy_port or running_port or int(default_port)
     return host, int(port)
 

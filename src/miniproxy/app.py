@@ -141,13 +141,17 @@ def _proxy_target(proxy_host: str | None, proxy_port: int | None) -> tuple[str, 
     """Resolve the proxy host:port to advertise (query overrides → running
     proxy → defaults)."""
     args = flask_request.args
-    running = proxy_server.status().get("port")
+    st = proxy_server.status()
     return connect_helpers.resolve_proxy_target(
         proxy_host or args.get("proxy_host", ""),
         proxy_port or args.get("port", type=int),
         flask_request.host,
-        running_port=running,
+        running_port=st.get("port"),
         default_port=proxy_server.DEFAULT_PORT,
+        # Keeps the PAC honest when the proxy is loopback-only: devices must
+        # use their own 127.0.0.1 (via a port forward), not this server's
+        # public IP, which no longer accepts proxy connections.
+        bind_host=st.get("host"),
     )
 
 
@@ -367,19 +371,34 @@ def proxy_toggle():
 
 # ── Log API ────────────────────────────────────────────────────────────
 
+def _log_filters(**overrides: Any) -> dict[str, Any]:
+    """Read the shared capture filters off the query string.
+
+    Every filter-consuming endpoint goes through here (listing, count and all
+    exports) so the Live tab, the Intruder picker and the export menu can
+    never drift apart.  ``id`` is the shared id selector — ``42``, ``1,5,9``,
+    ``100-200``, or any comma/space separated mix.
+    """
+    args = flask_request.args
+    filters: dict[str, Any] = {
+        "method": args.get("method", "").strip(),
+        "status_class": args.get("status", "").strip(),
+        "url_substr": args.get("url", "").strip(),
+        "ids": args.get("id", "").strip(),
+    }
+    filters.update(overrides)
+    return filters
+
+
 @app.route("/api/logs")
 def get_logs():
     since = flask_request.args.get("since", 0, type=int)
     limit = flask_request.args.get("limit", 100, type=int)
     # Server-side filters — SQL-level, so exports/polls over huge DBs stay
     # bounded instead of shipping everything and filtering client-side.
-    method = flask_request.args.get("method", "").strip()
-    status_class = flask_request.args.get("status", "").strip()
-    url_substr = flask_request.args.get("url", "").strip()
     try:
         logs = db.get_logs(
-            limit=min(max(limit, 1), 1000), since_id=since,
-            method=method, status_class=status_class, url_substr=url_substr,
+            limit=min(max(limit, 1), 1000), since_id=since, **_log_filters()
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -390,11 +409,7 @@ def get_logs():
 def get_logs_count():
     """Matched-row count for the current filters (for 'N of M captures')."""
     try:
-        total = db.count_logs(
-            method=flask_request.args.get("method", "").strip(),
-            status_class=flask_request.args.get("status", "").strip(),
-            url_substr=flask_request.args.get("url", "").strip(),
-        )
+        total = db.count_logs(**_log_filters())
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"count": total})
@@ -421,6 +436,7 @@ def meta():
         "proxy_running": st["status"] == "running",
         "proxy_port": st.get("port"),
         "proxy_pid": st.get("pid"),
+        "proxy_host": st.get("host"),
     })
 
 
@@ -536,7 +552,7 @@ def export_har():
     try:
         rows = db.get_logs(limit=f["limit"], since_id=f["since"],
                            method=f["method"], status_class=f["status"],
-                           url_substr=f["url"])
+                           url_substr=f["url"], ids=f["ids"])
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:  # corrupted DB / IO error
@@ -567,7 +583,7 @@ def export_json():
     try:
         rows = db.get_logs(limit=f["limit"], since_id=f["since"],
                            method=f["method"], status_class=f["status"],
-                           url_substr=f["url"])
+                           url_substr=f["url"], ids=f["ids"])
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -792,6 +808,7 @@ def _export_filters() -> dict:
         "method": args.get("method", "").strip(),
         "status": args.get("status", "").strip(),
         "url": args.get("url", "").strip(),
+        "ids": args.get("id", "").strip(),
     }
 
 
