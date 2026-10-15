@@ -324,17 +324,18 @@ def connect_page():
 def proxy_status():
     """Capture status.
 
-    Since the v4 engine, capture is ALWAYS on — the old intercept toggle
-    gated capture on a config flag that fresh DBs didn't have, silently
-    producing routed-but-empty proxies. The endpoint stays for UI
-    compatibility and still stores the preference, but capture no longer
-    pauses.
+    Capture itself is ALWAYS on in the v4 engine — an earlier intercept
+    toggle gated capture on a config flag that fresh DBs didn't have, which
+    silently produced routed-but-empty proxies. The preference is still
+    stored, and it is now the value actually read back by the intercept
+    addon (both sides use the same 'intercept' config key), so the reported
+    value reflects stored state instead of a hardcoded True.
     """
     if flask_request.method == "POST":
         data = flask_request.get_json(silent=True) or {}
         db.set_intercept(bool(data.get("enabled", True)))
     return jsonify({
-        "intercept_enabled": True,
+        "intercept_enabled": db.get_intercept(),
         "capture": "always",
         "note": "v4 engine captures unconditionally; the toggle is kept for UI compatibility.",
     })

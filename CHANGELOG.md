@@ -12,6 +12,19 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-10-15
+
+### Fixed
+- **The intercept toggle was a silent no-op.** `set_intercept()` writes the
+  `intercept` config key, but the intercept addon read `intercept_enabled` —
+  a key nothing in the codebase ever wrote. Interception was therefore
+  permanently on regardless of the stored preference. Both sides now use
+  `intercept`. The addon defaults the key to `"1"`, so a fresh session (which
+  has no row yet) still starts with interception enabled — verified against a
+  real fresh DB, and against an existing one.
+- `GET/POST /api/proxy/status` returned a hardcoded `"intercept_enabled": true`
+  instead of the stored value.
+
 ## [0.6.0] — 2026-10-15
 
 Closes the capture DB to the world, and makes one filter definition serve
@@ -185,7 +198,8 @@ See the git history (<https://github.com/Zaidux/miniproxy/commits/main>) —
 the pre-0.4 releases were the Riciplay-bundled variant without a standalone
 changelog.
 
-[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.4.0

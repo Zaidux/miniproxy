@@ -165,7 +165,16 @@ class InterceptAddon:
         self.db = Database()
         self._init_queue()
         self._init_decisions()
-        self._intercept_enabled = self.db.get_config("intercept_enabled", "1") == "1"
+        # Read the SAME key that set_intercept() writes ('intercept').
+        # This used to read an 'intercept_enabled' key that nothing in the
+        # codebase ever wrote, so the toggle was a no-op and intercept was
+        # permanently on regardless of the stored preference.
+        #
+        # Default '1' matters: a fresh DB has no row at all, and
+        # db.get_intercept() reports False in that case. Defaulting here
+        # keeps intercept enabled on a fresh session, which is the
+        # long-standing behaviour and what every existing install relies on.
+        self._intercept_enabled = self.db.get_config("intercept", "1") == "1"
         self._rules: list[dict[str, str]] = self._load_rules()
         self._lock = threading.Lock()
 
