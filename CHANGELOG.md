@@ -12,7 +12,7 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
-## [0.6.2] — 2026-10-16
+## [0.6.3] — 2026-10-16
 
 The dashboard becomes something you can actually scan on a phone, and
 browser noise stops drowning out the target.
@@ -100,6 +100,14 @@ browser noise stops drowning out the target.
 
 ### Fixed
 
+- **The noise gate could stop all capture.** The capture-time check read
+  `req` one line before `req` was assigned, raising `UnboundLocalError` on
+  every single flow. mitmdump reports an addon exception and carries on, so
+  the proxy still routed traffic while writing **nothing** to the capture DB
+  — silent, and only visible as an empty request table. Fixed, and covered by
+  an end-to-end test that runs the real addon under a real mitmdump process and
+  asserts traffic actually lands in the DB (plus a check that the addon emits
+  no traceback), so a swallowed addon exception fails CI from now on.
 - A drag of the splitter handle also fired a click on it, so **every resize
   collapsed the detail pane**. The toggle is now suppressed for a real drag.
 - `count_logs()` counted by materialising every matching row into Python
@@ -302,8 +310,8 @@ See the git history (<https://github.com/Zaidux/miniproxy/commits/main>) —
 the pre-0.4 releases were the Riciplay-bundled variant without a standalone
 changelog.
 
-[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.6.2...HEAD
-[0.6.2]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.2
+[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.3
 [0.6.1]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.5.0

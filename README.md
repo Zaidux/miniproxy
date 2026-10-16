@@ -230,9 +230,9 @@ src/miniproxy/
 ```bash
 git clone https://github.com/Zaidux/miniproxy && cd miniproxy
 pip install -e ".[dev]"
-pytest                     # 300+ tests: db, devices, API, exports, intruder,
+pytest                     # 310+ tests: db, devices, API, exports, intruder,
                           # process mgr, TUI, connect, noise, JS/Python parity,
-                          # dashboard XSS
+                          # dashboard XSS, live mitmdump capture
 ```
 
 CI runs the suite on Linux/macOS (Python 3.10/3.12) for every push and PR,

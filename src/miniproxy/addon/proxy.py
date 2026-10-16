@@ -127,6 +127,8 @@ class MiniProxyAddon:
                 self._skipped = getattr(self, "_skipped", 0) + 1
             return
 
+        req = flow.request
+
         # Noise gate: known telemetry/ad hosts (user-enabled rules) never reach
         # the DB. Runs *after* the scope guard and *before* store_request, so a
         # dropped flow is genuinely never written — not written-then-deleted.
@@ -139,7 +141,6 @@ class MiniProxyAddon:
         # on a per-DB "intercept" config flag that defaults to absent/False on
         # every fresh session DB — which silently produced proxies that routed
         # traffic but captured nothing (empty flows).
-        req = flow.request
         req_id = self.db.store_request(
             method=req.method,
             url=req.pretty_url,

@@ -1,6 +1,6 @@
 {
   "name": "riciplay-miniproxy",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard",
   "main": "index.js",
   "bin": {
