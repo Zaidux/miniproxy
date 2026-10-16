@@ -148,8 +148,17 @@ Tools that ignore proxy env vars can usually be pointed explicitly (`curl -x`, `
 - **Resizable / collapsible panes** — drag the divider, click it to hide the detail pane. Remembered across refreshes.
 - **Highlight + notes** — an 8-colour Burp-style palette per row (tap the **⋮** button — a real touch target, no right-click needed) and free-text notes. Stored with the capture, so they survive restarts.
 - **Pretty / Raw / Hex** — every body, both request and response. JSON re-indented, bytes escaped, or a full hex dump with offsets and an ASCII gutter.
+- **Compare captures** — diff two requests the way Burp's Compare does. Added a parameter and want to know what changed? The summary names it: `role: 'user' → 'admin'`.
+- **Body search** — full-text over request *and* response bodies, where flags and leaked tokens actually live.
 - **Host focus + Hide static** — one tap to narrow to your target, or drop images/fonts/css/js.
 - **Noise control** — see below.
+
+### Testing tools
+
+- **Repeater** — persistent tabs with per-tab send history, auto-saving edits, and an optional **follow redirects** so you can see where a 302 lands.
+- **Intruder** — `§param§` fuzzing in two modes: one wordlist into every position, or **pitchfork** (a different list per position — usernames × passwords, which is how auth labs are actually solved).
+- **Bundled wordlists** — IDs, usernames, passwords, parameter names, ports, paths. No `.txt` hunting on a fresh install.
+- **Match & replace** — rewrite headers, query params or bodies on requests as they pass through the proxy.
 
 Captures persist across refreshes and restarts until you click
 **Clear all captures…**.
@@ -230,9 +239,10 @@ src/miniproxy/
 ```bash
 git clone https://github.com/Zaidux/miniproxy && cd miniproxy
 pip install -e ".[dev]"
-pytest                     # 310+ tests: db, devices, API, exports, intruder,
+pytest                     # 390+ tests: db, devices, API, exports, intruder,
                           # process mgr, TUI, connect, noise, JS/Python parity,
-                          # dashboard XSS, live mitmdump capture
+                          # dashboard XSS, live mitmdump capture, diff,
+                          # body search, pitchfork, selection safety
 ```
 
 CI runs the suite on Linux/macOS (Python 3.10/3.12) for every push and PR,

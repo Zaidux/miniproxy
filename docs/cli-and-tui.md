@@ -84,14 +84,20 @@ Layout:
 ```
 ┌ proxy bar ──────────────────────────────────────────────────────┐
 ├─────────────────────────────────────────────────────────────────┤
-│ [method ▾] [status ▾] [ url substring…                        ] │
+│ [method ▾] [status ▾] [ url… ] [ bodies… ] [ host… ] [x] [ ]    │
 ├───────────────────────────────┬─────────────────────────────────┤
 │ live capture table            │ Request / Response / Intruder   │
-│ ID · Method · Status · ms · URL│ detail tabs                    │
+│ ID · Method · Status · ms ·   │ detail tabs                    │
+│ Host · Path · marker          │                                 │
 ├───────────────────────────────┴─────────────────────────────────┤
 │ footer: key shortcuts                                           │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+The table splits the URL into **Host** and **Path** (the host repeats on every
+row; the path is what identifies the endpoint) and carries a **marker** column
+showing the highlight colour, or `*note` for a capture with a note — colour
+tints do not survive every terminal, so the TUI states it in text.
 
 ### Keys
 
@@ -101,19 +107,33 @@ Layout:
 | `g` / `home`, `G` / `end` | jump to top / bottom |
 | `r` or `enter` | open the **Repeater** for the selected request |
 | `i` | show **Intruder** results for the selected request |
+| `d` | **compare two captures** — press on A, move, press on B |
+| `n` | **noise rules** — `enter` toggles a rule, `a` toggles all |
+| `m` | **match & replace** rules currently active |
 | `c` | copy the request as a **curl** command |
 | `y` | copy the **response body** |
 | `e` | **save the response body** to a timestamped file in the current directory |
 | `p` | **start/stop the proxy** (blocks ≤ 8s; runs off-thread) |
 | `w` | **connect a browser/device** — overlay with the proxy address, PAC URL, CA download, and curl one-liners |
-| `f` | focus the URL filter |
+| `f` | browse/focus the URL filter |
+| `b` | focus the **body search** filter |
+| `h` | focus the **host** filter |
 | `t` / `s` | focus method / status filter |
 | `R` | force-refresh the table |
 | `?` | help screen |
 | `q` | quit |
 
+Filters mirror the dashboard: method, status, URL substring, **body search**
+(request *and* response), **host**, plus **Static** and **Marked** checkboxes.
+
 In the Repeater modal: edit method/URL/headers/body, then **Ctrl+S** to
 send (Esc closes). The response renders inline, headers + body.
+
+### Comparing captures
+
+Press `d` on a capture to mark it **A**, move with `j`/`k`, and press `d` again.
+The comparison opens with the same summary the dashboard shows
+(`role: 'user' → 'admin'`); `m` cycles JSON → tokens → bytes.
 
 ### Workflows
 
@@ -123,6 +143,14 @@ inspect headers/bodies in the right pane.
 
 **Replay with changes:** select a request, `r`, tweak the body in the
 modal, Ctrl+S. Compare the status against the original.
+
+**Find a leaked value:** `b`, then type a fragment (`token`, `flag`, `admin`).
+This searches the bodies, not the URL, so it finds things the URL filter
+cannot see.
+
+**Quiet a noisy capture:** `n`, then `a` to enable the bundled telemetry/ad
+rules, or `enter` to toggle individual hosts. Matched traffic stops reaching
+the DB.
 
 **Grab a reproducible command:** `c` on any request → paste anywhere. The
 curl includes original headers and body.

@@ -365,6 +365,48 @@ class Database:
             );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_noise_rules_identity
                 ON noise_rules (kind, value);
+
+            CREATE TABLE IF NOT EXISTS repeater_tabs (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                title      TEXT NOT NULL DEFAULT '',
+                method     TEXT NOT NULL DEFAULT 'GET',
+                url        TEXT NOT NULL DEFAULT '',
+                headers    TEXT,
+                body       TEXT,
+                source_id  INTEGER,
+                created    TEXT NOT NULL,
+                updated    TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS repeater_history (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                tab_id           INTEGER NOT NULL,
+                created          TEXT NOT NULL,
+                method           TEXT NOT NULL,
+                url              TEXT NOT NULL,
+                headers          TEXT,
+                body             TEXT,
+                status_code      INTEGER,
+                response_headers TEXT,
+                response_body    TEXT,
+                error            TEXT,
+                FOREIGN KEY (tab_id) REFERENCES repeater_tabs(id)
+                  ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_repeater_history_tab
+                ON repeater_history (tab_id, id DESC);
+
+            CREATE TABLE IF NOT EXISTS rewrite_rules (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                target   TEXT NOT NULL,
+                kind     TEXT NOT NULL DEFAULT 'header',
+                match    TEXT NOT NULL,
+                replace  TEXT NOT NULL DEFAULT '',
+                regex    INTEGER NOT NULL DEFAULT 0,
+                enabled  INTEGER NOT NULL DEFAULT 1,
+                created  TEXT NOT NULL
+            );
         """)
         # Deployed session DBs predate the timing columns — migrate in place.
         # Only duplicate-column errors are ignorable: swallowing everything
@@ -609,7 +651,10 @@ class Database:
                          url_substr: str = "", ids: str = "",
                          host: str = "", exclude_host: str = "",
                          hide_static: bool = False,
-                         highlighted_only: bool = False) -> tuple[list[str], list[Any]]:
+                         highlighted_only: bool = False,
+                         body_substr: str = "", exclude_body: str = "",
+                         min_length: int = 0,
+                         ) -> tuple[list[str], list[Any]]:
         """Build the shared WHERE clause + params for every listing/count/export.
 
         One builder for all three paths so ``/api/logs``, ``/api/logs/count``
@@ -630,6 +675,14 @@ class Database:
         * ``hide_static`` — drop images/fonts/css/js/media (see
           :func:`is_static_asset`). Applied in SQL so a huge DB stays bounded.
         * ``highlighted_only`` — only rows the user marked.
+        * ``body_substr`` — case-insensitive substring of the request **or**
+          response body. Body search is where "find the flag", "find the
+          leaked token" and "which response mentions this param" actually get
+          answered; a URL-only filter cannot see any of it.
+        * ``exclude_body`` — the inverse: hide rows whose body contains this.
+          Combined with ``body_substr`` it expresses "contains X but not Y".
+        * ``min_length`` — minimum response body length, for finding the
+          interesting fat response among a page's worth of thin ones.
         """
         clauses: list[str] = []
         params: list[Any] = []
@@ -661,6 +714,29 @@ class Database:
             clauses.append("NOT " + _static_sql())
         if highlighted_only:
             clauses.append("(highlight IS NOT NULL AND TRIM(highlight) != '')")
+        if body_substr:
+            # Both sides of the exchange: a flag in a response and a payload
+            # in a request are equally worth finding.
+            clauses.append(
+                "(INSTR(LOWER(COALESCE(response_body, '')), ?) > 0"
+                " OR INSTR(LOWER(COALESCE(body, '')), ?) > 0)"
+            )
+            needle = body_substr.lower()
+            params.extend([needle, needle])
+        if exclude_body:
+            clauses.append(
+                "(INSTR(LOWER(COALESCE(response_body, '')), ?) = 0"
+                " AND INSTR(LOWER(COALESCE(body, '')), ?) = 0)"
+            )
+            needle = exclude_body.lower()
+            params.extend([needle, needle])
+        if min_length and int(min_length) > 0:
+            # Prefer the recorded original length (accurate even when the
+            # stored body was truncated), fall back to what we kept.
+            clauses.append(
+                "(COALESCE(response_body_len, LENGTH(COALESCE(response_body, ''))) >= ?)"
+            )
+            params.append(int(min_length))
         id_parts = parse_id_filter(ids)
         if id_parts:
             # OR-ed inside one parenthesised group: `"1,5,9"` must match any of
@@ -684,6 +760,9 @@ class Database:
         exclude_host: str = "",
         hide_static: bool = False,
         highlighted_only: bool = False,
+        body_substr: str = "",
+        exclude_body: str = "",
+        min_length: int = 0,
     ) -> list[dict[str, Any]]:
         """Newest-first capture listing with server-side filtering.
 
@@ -694,6 +773,8 @@ class Database:
             method=method, status_class=status_class, url_substr=url_substr,
             ids=ids, host=host, exclude_host=exclude_host,
             hide_static=hide_static, highlighted_only=highlighted_only,
+            body_substr=body_substr, exclude_body=exclude_body,
+            min_length=min_length,
         )
         # since_id is a range bound, not a filter, so it goes in front.
         clauses.insert(0, "id > ?")
@@ -823,6 +904,240 @@ class Database:
         ).fetchall()
         conn.close()
         return {int(r["id"]): str(r["highlight"]) for r in rows}
+
+    # ── Repeater tabs + per-tab history ──────────────────────────────
+
+    def create_repeater_tab(self, *, title: str = "", method: str = "GET",
+                            url: str = "", headers: dict | None = None,
+                            body: str = "", source_id: int | None = None) -> dict:
+        """Create a repeater tab and return it.
+
+        Tabs are persisted rather than held in the browser so a refresh (or a
+        different device — the dashboard is often driven from a phone) does not
+        lose work in progress.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        label = (title or url or "New tab").strip()[:120]
+        conn = self._connect()
+        cur = conn.execute(
+            "INSERT INTO repeater_tabs (title, method, url, headers, body,"
+            " source_id, created, updated) VALUES (?,?,?,?,?,?,?,?)",
+            (label, (method or "GET").upper()[:16], url[:4000],
+             json.dumps(headers or {}), body or "", source_id, now, now),
+        )
+        conn.commit()
+        tab_id = cur.lastrowid
+        conn.close()
+        return self.get_repeater_tab(tab_id) or {}
+
+    def get_repeater_tabs(self) -> list[dict[str, Any]]:
+        """All tabs, most recently updated first."""
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT * FROM repeater_tabs ORDER BY updated DESC, id DESC"
+        ).fetchall()
+        conn.close()
+        return [self._tab_row(r) for r in rows]
+
+    def get_repeater_tab(self, tab_id: int) -> dict[str, Any] | None:
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT * FROM repeater_tabs WHERE id=?", (int(tab_id),)
+        ).fetchone()
+        conn.close()
+        return self._tab_row(row) if row else None
+
+    @staticmethod
+    def _tab_row(row) -> dict[str, Any]:
+        out = dict(row)
+        raw = out.get("headers")
+        if isinstance(raw, str):
+            try:
+                out["headers"] = json.loads(raw or "{}")
+            except ValueError:
+                out["headers"] = {}
+        return out
+
+    def update_repeater_tab(self, tab_id: int, **fields: Any) -> bool:
+        """Update a tab. Only whitelisted columns are writable."""
+        allowed = {"title", "method", "url", "headers", "body", "source_id"}
+        sets, params = [], []
+        for key, value in fields.items():
+            if key not in allowed:
+                raise ValueError(f"unknown tab field: {key}")
+            if key == "headers":
+                sets.append("headers=?")
+                params.append(json.dumps(value or {}))
+            elif key == "method":
+                sets.append("method=?")
+                params.append(str(value or "GET").upper()[:16])
+            elif key == "title":
+                sets.append("title=?")
+                params.append(str(value or "")[:120])
+            elif key == "url":
+                sets.append("url=?")
+                params.append(str(value or "")[:4000])
+            elif key == "body":
+                sets.append("body=?")
+                params.append(str(value or "")[:100_000])
+            else:
+                sets.append("source_id=?")
+                params.append(value)
+        if not sets:
+            return self.get_repeater_tab(tab_id) is not None
+        sets.append("updated=?")
+        params.extend([datetime.now(timezone.utc).isoformat(), int(tab_id)])
+        conn = self._connect()
+        cur = conn.execute(
+            f"UPDATE repeater_tabs SET {', '.join(sets)} WHERE id=?", params
+        )
+        conn.commit()
+        conn.close()
+        return bool(cur.rowcount)
+
+    def delete_repeater_tab(self, tab_id: int) -> bool:
+        conn = self._connect()
+        # Explicit child delete: FK cascades are off unless the pragma is set
+        # on *this* connection, and orphan history would be invisible garbage.
+        conn.execute("DELETE FROM repeater_history WHERE tab_id=?", (int(tab_id),))
+        cur = conn.execute("DELETE FROM repeater_tabs WHERE id=?", (int(tab_id),))
+        conn.commit()
+        conn.close()
+        return bool(cur.rowcount)
+
+    def add_repeater_history(self, tab_id: int, *, method: str, url: str,
+                             headers: dict | None = None, body: str = "",
+                             status_code: int | None = None,
+                             response_headers: dict | None = None,
+                             response_body: str = "", error: str | None = None,
+                             ) -> int | None:
+        """Record one send. Returns the history id, or None if the tab is gone."""
+        conn = self._connect()
+        if not conn.execute(
+            "SELECT 1 FROM repeater_tabs WHERE id=?", (int(tab_id),)
+        ).fetchone():
+            conn.close()
+            return None
+        cur = conn.execute(
+            "INSERT INTO repeater_history (tab_id, created, method, url,"
+            " headers, body, status_code, response_headers, response_body,"
+            " error) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (int(tab_id), datetime.now(timezone.utc).isoformat(),
+             (method or "GET").upper()[:16], str(url or "")[:4000],
+             json.dumps(headers or {}), str(body or "")[:100_000],
+             status_code, json.dumps(response_headers or {}),
+             str(response_body or "")[:100_000], (error or "")[:500] or None),
+        )
+        conn.commit()
+        rid = cur.lastrowid
+        conn.close()
+        self._trim_history(int(tab_id))
+        return rid
+
+    HISTORY_LIMIT = 50
+
+    def _trim_history(self, tab_id: int) -> None:
+        """Keep the last N sends per tab — history is a comparison aid, not
+        an archive, and an unbounded table would grow with every fuzz."""
+        conn = self._connect()
+        conn.execute(
+            "DELETE FROM repeater_history WHERE tab_id=? AND id NOT IN "
+            "(SELECT id FROM repeater_history WHERE tab_id=? ORDER BY id DESC LIMIT ?)",
+            (int(tab_id), int(tab_id), self.HISTORY_LIMIT),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_repeater_history(self, tab_id: int,
+                             limit: int = 50) -> list[dict[str, Any]]:
+        """Newest-first send history for a tab."""
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT * FROM repeater_history WHERE tab_id=? "
+            "ORDER BY id DESC LIMIT ?",
+            (int(tab_id), max(int(limit), 1)),
+        ).fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            d = dict(r)
+            for key in ("headers", "response_headers"):
+                if isinstance(d.get(key), str):
+                    try:
+                        d[key] = json.loads(d[key] or "{}")
+                    except ValueError:
+                        d[key] = {}
+            out.append(d)
+        return out
+
+    # ── Match & replace rules ────────────────────────────────────────
+
+    REWRITE_TARGETS = ("header", "query", "body")
+    REWRITE_KINDS = ("exact", "contains", "regex")
+
+    def add_rewrite_rule(self, *, target: str, kind: str, match: str,
+                         replace: str = "", regex: bool = False,
+                         enabled: bool = True) -> int:
+        """Add a rewrite rule applied to in-flight traffic.
+
+        ``kind`` must agree with ``regex``: a regex flag on an ``exact`` match
+        would silently do nothing, which is worse than refusing.
+        """
+        target = str(target or "").strip().lower()
+        kind = str(kind or "exact").strip().lower()
+        if target not in self.REWRITE_TARGETS:
+            raise ValueError(f"invalid rewrite target: {target!r}")
+        if kind not in self.REWRITE_KINDS:
+            raise ValueError(f"invalid rewrite kind: {kind!r}")
+        needle = str(match or "")
+        if not needle:
+            raise ValueError("rewrite rule needs a match value")
+        if kind == "regex":
+            try:
+                re.compile(needle)
+            except re.error as exc:
+                raise ValueError(f"invalid regex: {exc}") from exc
+        elif regex:
+            raise ValueError("regex=True requires kind='regex'")
+        conn = self._connect()
+        cur = conn.execute(
+            "INSERT INTO rewrite_rules (target, kind, match, replace, regex,"
+            " enabled, created) VALUES (?,?,?,?,?,?,?)",
+            (target, kind, needle, str(replace or "")[:2000],
+             1 if kind == "regex" else 0, 1 if enabled else 0,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        rid = cur.lastrowid
+        conn.close()
+        return int(rid)
+
+    def get_rewrite_rules(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        conn = self._connect()
+        sql = "SELECT * FROM rewrite_rules"
+        if enabled_only:
+            sql += " WHERE enabled=1"
+        sql += " ORDER BY id"
+        rows = conn.execute(sql).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def set_rewrite_rule_enabled(self, rule_id: int, enabled: bool) -> bool:
+        conn = self._connect()
+        cur = conn.execute(
+            "UPDATE rewrite_rules SET enabled=? WHERE id=?",
+            (1 if enabled else 0, int(rule_id)),
+        )
+        conn.commit()
+        conn.close()
+        return bool(cur.rowcount)
+
+    def delete_rewrite_rule(self, rule_id: int) -> bool:
+        conn = self._connect()
+        cur = conn.execute("DELETE FROM rewrite_rules WHERE id=?", (int(rule_id),))
+        conn.commit()
+        conn.close()
+        return bool(cur.rowcount)
 
     # ── Noise rules ────────────────────────────────────────────────
 

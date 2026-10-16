@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +42,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Input,
@@ -53,7 +55,7 @@ from textual.widgets import (
     TextArea,
 )
 
-from miniproxy.addon.db import Database
+from miniproxy.addon.db import Database, host_of, is_static_asset
 from miniproxy.server import (
     STATE_DIR,
     start as proxy_start,
@@ -89,6 +91,24 @@ def as_curl(row: dict[str, Any]) -> str:
     if body:
         parts += ["--data-raw", shlex.quote(str(body))]
     return " ".join(parts)
+
+
+def _split_url(url: str) -> tuple[str, str]:
+    """Split a URL into ``(host, path)`` for the table columns.
+
+    Mirrors the dashboard's split: in a real capture the host repeats on every
+    row and the path is what identifies the endpoint, so two columns beat one
+    wide URL column.
+    """
+    rest = url.split("://", 1)[1] if "://" in url else url
+    host = rest.split("/", 1)[0]
+    path = rest[len(host):].split("?", 1)[0]
+    return host, (path or "/")
+
+
+def _short_host(host: str) -> str:
+    """Drop the ``www.``/``m.`` noise prefix when displaying a host."""
+    return re.sub(r"^(www|m|mobile|amp)\.", "", host, flags=re.I)
 
 
 def _fmt_ms(value: Any) -> str:
@@ -192,6 +212,247 @@ class ConnectScreen(ModalScreen[None]):
             self.dismiss()
 
 
+class TextViewerScreen(ModalScreen[None]):
+    """A plain modal showing pre-rendered RichLog lines."""
+
+    CSS = """
+    TextViewerScreen { align: center middle; background: $surface; }
+    #tv-wrap {
+        width: 100; max-width: 96%; height: auto; max-height: 88%;
+        padding: 1 2; border: round $accent; background: $surface;
+    }
+    #tv-viewer { height: auto; max-height: 70%; }
+    """
+
+    BINDINGS = [Binding("escape,q", "dismiss_screen", "Close")]
+
+    def __init__(self, title: str, lines: list) -> None:
+        super().__init__()
+        self._title = title
+        self._lines = lines
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="tv-wrap"):
+            yield Label(self._title, classes="title")
+            yield DetailViewer("tv-viewer")
+
+    def on_mount(self) -> None:
+        from rich.text import Text
+
+        body = Text()
+        for line in self._lines:
+            if isinstance(line, tuple):
+                body.append(line[0], style=line[1])
+            else:
+                body.append(str(line))
+            body.append("\n")
+        self.query_one("#tv-viewer", DetailViewer).load(body)
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss()
+
+
+class NoiseScreen(ModalScreen[None]):
+    """Noise rules: which hosts are skipped, and how to change that.
+
+    The dashboard got this first; the TUI needs it too so a headless/SSH
+    session can quiet a noisy capture without a browser.
+    """
+
+    CSS = """
+    NoiseScreen { align: center middle; background: $surface; }
+    #noise-wrap {
+        width: 96; max-width: 96%; height: auto; max-height: 88%;
+        padding: 1 2; border: round $accent; background: $surface;
+    }
+    #noise-viewer { height: auto; max-height: 60%; }
+    #noise-hint { color: $text-muted; padding-top: 1; }
+    """
+
+    BINDINGS = [
+        Binding("escape,n", "dismiss_screen", "Close"),
+        Binding("enter", "toggle_rule", "Toggle rule"),
+        Binding("a", "toggle_all", "All on/off"),
+    ]
+
+    def __init__(self, db: Database) -> None:
+        super().__init__()
+        self._db = db
+        self._rules: list[dict[str, Any]] = []
+        self._cursor = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="noise-wrap"):
+            yield Label("Noise filter — ignored hosts never reach the capture DB",
+                        classes="title")
+            yield DetailViewer("noise-viewer")
+            yield Static("", id="noise-hint")
+
+    def on_mount(self) -> None:
+        self._reload()
+
+    def _reload(self) -> None:
+        self._rules = self._db.list_noise_rules()
+        scan = self._db.scan_noise()
+        from rich.text import Text
+
+        body = Text()
+        body.append(
+            f"{scan['matched']} captured row(s) match the noise model · "
+            f"{scan['keep']} kept\n"
+        )
+        if scan["by_host"]:
+            body.append("would be removed:\n", style="bold")
+            for entry in scan["by_host"][:12]:
+                body.append(f"  {entry['removed']:>5}  {entry['host']}\n")
+            body.append("\n")
+        body.append("rules  (enter toggles, a toggles all):\n", style="bold")
+        for i, rule in enumerate(self._rules):
+            mark = "[x]" if rule["enabled"] else "[ ]"
+            tag = " (bundled)" if rule["builtin"] else ""
+            prefix = "> " if i == self._cursor else "  "
+            body.append(f"{prefix}{mark} {rule['value']}{tag}\n",
+                        style="bold" if i == self._cursor else "")
+        if not self._rules:
+            body.append("  (no rules yet)\n")
+        self.query_one("#noise-viewer", DetailViewer).load(body)
+        self.query_one("#noise-hint", Static).update(
+            "Enabled rules are skipped at capture time — the traffic is still "
+            "proxied, it just never reaches the DB.  esc closes."
+        )
+
+    def action_toggle_rule(self) -> None:
+        if not self._rules:
+            return
+        rule = self._rules[self._cursor]
+        self._db.set_noise_rule_enabled(rule["id"], not rule["enabled"])
+        self._reload()
+
+    def action_toggle_all(self) -> None:
+        rules = self._db.list_noise_rules()
+        turning_on = not all(r["enabled"] for r in rules)
+        self._db.enable_all_noise_rules(turning_on)
+        self._reload()
+
+    def on_key(self, event) -> None:  # noqa: ANN001 - Textual event
+        if event.key in ("up", "k"):
+            self._cursor = max(0, self._cursor - 1)
+            self._reload()
+            event.stop()
+        elif event.key in ("down", "j"):
+            self._cursor = min(max(len(self._rules) - 1, 0), self._cursor + 1)
+            self._reload()
+            event.stop()
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "noise-close":
+            self.dismiss()
+
+
+class DiffScreen(ModalScreen[None]):
+    """Side-by-side comparison of two captures.
+
+    Same engine the dashboard uses (``miniproxy.diff``), rendered as text: the
+    summary line, the changed fields, and the two bodies.
+    """
+
+    CSS = """
+    DiffScreen { align: center middle; background: $surface; }
+    #diff-wrap {
+        width: 110; max-width: 98%; height: auto; max-height: 90%;
+        padding: 1 2; border: round $accent; background: $surface;
+    }
+    #diff-viewer { height: auto; max-height: 70%; }
+    """
+
+    BINDINGS = [
+        Binding("escape,d", "dismiss_screen", "Close"),
+        Binding("m", "cycle_mode", "Mode"),
+    ]
+
+    def __init__(self, db: Database, a_id: int, b_id: int) -> None:
+        super().__init__()
+        self._db = db
+        self._a_id = a_id
+        self._b_id = b_id
+        self._mode = "auto"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="diff-wrap"):
+            yield Label("Compare captures", classes="title")
+            yield DetailViewer("diff-viewer")
+
+    def on_mount(self) -> None:
+        self._refresh_diff()
+
+    def _refresh_diff(self) -> None:
+        # NOTE: not named _render — Textual's Widget._render() is the hook
+        # that supplies the widget's visual, and overriding it makes the
+        # screen render a None visual and crash.
+
+        from miniproxy.diff import diff_captures
+
+        a = self._db.get_request(self._a_id)
+        b = self._db.get_request(self._b_id)
+        from rich.text import Text
+
+        body = Text()
+        if a is None or b is None:
+            body.append("one of the captures no longer exists", style="bold red")
+            self.query_one("#diff-viewer", DetailViewer).load(body)
+            return
+        result = diff_captures(a, b, mode=self._mode)
+        body.append(f"A  #{a['id']}  {a.get('method')} {a.get('url')}\n")
+        body.append(f"B  #{b['id']}  {b.get('method')} {b.get('url')}\n\n")
+        style = "bold green" if result["identical"] else "bold yellow"
+        body.append(result["summary"] + "\n", style=style)
+        body.append(f"mode: {result['mode']}  (m cycles)\n\n")
+
+        params = result["params"]
+        rows = (params["changed"] + params["added"] + params["removed"])
+        if rows:
+            body.append("query parameters\n", style="bold")
+            for e in rows:
+                body.append(f"  {e['name']}: {e.get('a')!r} → {e.get('b')!r}\n")
+
+        headers = result["headers"]
+        hrows = headers["changed"] + headers["added"] + headers["removed"]
+        if hrows:
+            body.append("headers\n", style="bold")
+            for e in hrows:
+                body.append(f"  {e['name']}: {str(e.get('a'))[:60]!r} → {str(e.get('b'))[:60]!r}\n")
+
+        dbody = result.get("body") or {}
+        if dbody.get("applicable") and result["mode"] == "json":
+            jrows = dbody["changed"] + dbody["added"] + dbody["removed"]
+            if jrows:
+                body.append("json fields\n", style="bold")
+                for e in jrows:
+                    body.append(f"  {e['path']}: {e.get('a')!r} → {e.get('b')!r}\n")
+        elif dbody.get("applicable") and result["mode"] == "token" and dbody.get("changed"):
+            only = [r["token"] for r in dbody["rows"] if not r["common"]][:40]
+            body.append("tokens only in A\n", style="bold")
+            body.append("  " + "  ".join(only) + "\n")
+        elif dbody.get("applicable") and not dbody.get("identical"):
+            body.append(f"bodies differ at byte {dbody.get('offset')}\n", style="bold")
+        self.query_one("#diff-viewer", DetailViewer).load(body)
+
+    def action_cycle_mode(self) -> None:
+        order = ["auto", "json", "token", "char"]
+        self._mode = order[(order.index(self._mode) + 1) % len(order)]
+        self._refresh_diff()
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "diff-close":
+            self.dismiss()
+
+
 class HelpScreen(ModalScreen[None]):
     """Full-screen keybinding cheatsheet."""
 
@@ -229,7 +490,11 @@ class HelpScreen(ModalScreen[None]):
             ("p", "Toggle the proxy (start / stop)"),
             ("w", "How to connect a browser/device (proxy address, PAC, CA, QR)"),
             ("R", "Force-refresh the request table"),
+            ("d", "Compare two captures (press on A, then on B)"),
+            ("n", "Noise rules — which hosts are skipped"),
+            ("m", "Match & replace rules"),
             ("f / t / s", "Focus URL / method / status filter"),
+            ("b / h / x", "Focus body / host filter, toggle static"),
             ("j k / ↑ ↓", "Move in the request table"),
             ("g G / home end", "Jump to top / bottom"),
             ("enter", "Open the Repeater (same as r)"),
@@ -438,6 +703,9 @@ class MiniProxyTUI(App[None]):
         Binding("i", "show_intruder", "Intruder"),
         Binding("c", "copy_curl", "Copy curl"),
         Binding("y", "copy_body", "Copy body"),
+        Binding("d", "compare", "Compare"),
+        Binding("n", "show_noise", "Noise"),
+        Binding("m", "show_rewrite", "Rewrite"),
         Binding("e", "save_body", "Save body"),
         Binding("f", "focus_url_filter", "URL filter"),
         Binding("t", "focus_method_filter", "Method"),
@@ -454,6 +722,8 @@ class MiniProxyTUI(App[None]):
         self._db_path = db_path or os.environ.get("MINIPROXY_DB_PATH") or str(STATE_DIR / "proxy.db")
         self.db = Database(self._db_path)
         self._rows_by_key: dict[str, dict[str, Any]] = {}
+        # id of the capture marked as "A" for the next comparison (action_compare)
+        self._diff_mark: int | None = None
         self._last_sig: tuple | None = None
         self._proxy_status_text = "unknown"
         self._refresh_s = max(float(refresh), 0.5)
@@ -476,6 +746,12 @@ class MiniProxyTUI(App[None]):
                     prompt="Status", allow_blank=True, id="filter-status",
                 )
                 yield Input(placeholder="Filter by URL substring…", id="filter-url")
+                yield Input(placeholder="Search bodies…", id="filter-body")
+                yield Input(placeholder="Host…", id="filter-host")
+                yield Checkbox("Static", id="filter-static",
+                               tooltip="Hide images/fonts/css/js")
+                yield Checkbox("Marked", id="filter-highlighted",
+                               tooltip="Only captures you highlighted")
             with Horizontal(id="split"):
                 yield DataTable(id="requests", cursor_type="row", zebra_stripes=True)
                 with Vertical(id="detail-pane"):
@@ -495,7 +771,7 @@ class MiniProxyTUI(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#requests", DataTable).add_columns("ID", "Method", "Status", "ms", "URL")
+        self.query_one("#requests", DataTable).add_columns("ID", "Method", "Status", "ms", "Host", "Path", "H")
         self._refresh_table(force=True)
         self._refresh_proxy_state()
         self.set_interval(self._refresh_s, self._poll)
@@ -516,6 +792,10 @@ class MiniProxyTUI(App[None]):
         method = _sel_text(self.query_one("#filter-method", Select)).upper()
         status = _sel_text(self.query_one("#filter-status", Select))
         url_sub = self.query_one("#filter-url", Input).value.strip().lower()
+        body_sub = self.query_one("#filter-body", Input).value.strip().lower()
+        host_sub = self.query_one("#filter-host", Input).value.strip().lower()
+        hide_static = bool(self.query_one("#filter-static", Checkbox).value)
+        only_marked = bool(self.query_one("#filter-highlighted", Checkbox).value)
         if method and str(row.get("method") or "").upper() != method:
             return False
         code = row.get("response_code")
@@ -529,6 +809,18 @@ class MiniProxyTUI(App[None]):
             if not isinstance(code, int) or code // 100 != int(status):
                 return False
         if url_sub and url_sub not in str(row.get("url") or "").lower():
+            return False
+        if body_sub:
+            hay = (str(row.get("response_body") or "") + " " +
+                   str(row.get("body") or "")).lower()
+            if body_sub not in hay:
+                return False
+        if host_sub and host_sub not in host_of(str(row.get("url") or "")):
+            return False
+        if hide_static and is_static_asset(str(row.get("url") or ""),
+                                           str(row.get("content_type") or "")):
+            return False
+        if only_marked and not row.get("highlight"):
             return False
         return True
 
@@ -553,7 +845,7 @@ class MiniProxyTUI(App[None]):
         table = self.query_one("#requests", DataTable)
         table.clear(columns=True)
         self._rows_by_key.clear()
-        table.add_columns("ID", "Method", "Status", "ms", "URL")
+        table.add_columns("ID", "Method", "Status", "ms", "Host", "Path", "H")
         for row in rows:
             if not self._row_matches(row):
                 continue
@@ -595,6 +887,51 @@ class MiniProxyTUI(App[None]):
         except Exception:
             return None
         return self._rows_by_key.get(str(cell_key.row_key.value))
+
+    # ── Noise, diff and rewrite (parity with the web dashboard) ─────
+    def action_show_noise(self) -> None:
+        """Open the noise-rule manager."""
+        self.push_screen(NoiseScreen(self.db))
+
+    def action_compare(self) -> None:
+        """Mark one capture as A, then compare it with a second.
+
+        Two presses rather than a multi-select widget: in a terminal the row
+        cursor is the only selection state, so "mark, move, compare" is the
+        natural gesture and needs no extra chrome.
+        """
+        current = self._selected_row()
+        if current is None:
+            self.notify("No capture selected", severity="warning")
+            return
+        if self._diff_mark is None:
+            self._diff_mark = current.get("id")
+            self.notify(f"Marked #{self._diff_mark} as A — move and press d again")
+            return
+        if self._diff_mark == current.get("id"):
+            self.notify("Pick a different capture to compare against")
+            return
+        a_id, self._diff_mark = self._diff_mark, None
+        self.push_screen(DiffScreen(self.db, a_id, current.get("id")))
+
+    def action_show_rewrite(self) -> None:
+        """List the match-and-replace rules active on traffic."""
+        body = RichLog(highlight=False)
+        rules = self.db.get_rewrite_rules()
+        body.write("match & replace — applied to requests as they pass through\n")
+        if not rules:
+            body.write("(no rules — traffic passes through untouched)")
+        for rule in rules:
+            mark = "on " if rule["enabled"] else "off"
+            arrow = f" → {rule['replace']!r}" if rule["replace"] else " → (empty)"
+            body.write(
+                f"[{mark}] {rule['kind']} {rule['target']}: "
+                f"{rule['match']!r}{arrow}"
+            )
+        body.write("")
+        body.write("Add or remove rules from the dashboard (Rewrite…);")
+        body.write("enabled rules take effect on new traffic immediately.")
+        self.push_screen(TextViewerScreen("Match & replace", body.lines))
 
     # ── Proxy status & toggle ──────────────────────────────────────────
 

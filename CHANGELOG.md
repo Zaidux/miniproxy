@@ -12,6 +12,111 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-16
+
+Eight features, plus the two interaction bugs they exposed.
+
+### Fixed
+
+- **You can copy values again.** The live poll re-rendered the table and the
+  detail panes every 2 seconds, which destroyed any text selection. Worse,
+  dragging *inside a row* to select its URL also fires the row's click
+  handler, so the selection was cleared the instant it was made — selecting a
+  value by hand was impossible. Rendering is now skipped when the output is
+  unchanged, and deferred entirely while a selection is held (it flushes as
+  soon as you click away).
+- **The note field keeps what you type.** The poll assigned the textarea's
+  `.value` on every tick, so text entered a second earlier was wiped — which
+  read as "the last word disappears when I press space". The field is now left
+  alone while it has focus or holds unsaved edits, and shows `unsaved…`
+  instead of silently losing work.
+
+### Added
+
+**Compare captures (response diffing)**
+
+- `GET /api/diff/<a>/<b>` and a dashboard modal. The access-control workflow:
+  send a request twice with one parameter changed, and read off what actually
+  changed instead of eyeballing two hex dumps.
+- Three views, chosen automatically for the data present:
+  - **JSON** — structural, keyed by dotted path, so `role: 'user' → 'admin'`
+    is one line.
+  - **Tokens** — word-level, for HTML/text. Punctuation is a token boundary,
+    so a *minified* page still localises the change rather than reporting one
+    unreadable blob.
+  - **Bytes** — character-level with context, for exact offsets.
+- Also diffs the URL parameters, path, status and headers — for access-control
+  work the changed parameter name is often the whole answer.
+- The summary names the change (`role: 'user' → 'admin'`), because "1 field
+  differs" is useless mid-test.
+- TUI equivalent: press `d` on one capture, move, press `d` again; `m` cycles
+  the mode.
+
+**Body search**
+
+- `body` / `exclude_body` / `min_length` filters in SQL, across the listing,
+  the count and every export. Searches the request **and** response body —
+  where flags, leaked tokens and unexpected parameters actually live.
+
+**Intruder pitchfork**
+
+- `POST /api/intruder/start` with `{"mode": "pitchfork", "lists": {"user":
+  [...], "pass": [...]}}`: a different wordlist per `§placeholder§`, run as a
+  product. The engine previously put one word into *every* position, so a
+  username × password attack was impossible.
+- The UI grows one row per placeholder found in the target request, each with
+  a list picker or file upload, and shows the combination count before you
+  start. Combos are capped at 10,000.
+
+**Bundled wordlists**
+
+- Five curated lists ship in the package — numeric IDs, usernames, common
+  passwords, parameter names, ports, paths — so a fresh install can attack
+  without hunting for a `.txt` first. `GET /api/wordlists`.
+
+**Repeater tabs + history**
+
+- Multiple persistent tabs (`/api/repeater/tabs`), stored server-side so a
+  refresh — or switching from desktop to phone — keeps work in progress.
+- Per-tab send history (last 50) with status and size, click to view any past
+  response. Edits auto-save as you type.
+- **Follow redirects** checkbox: reports the whole redirect chain and the final
+  URL. Off by default, because a lab that redirects is usually redirecting to a
+  login page and silently following hides the 302 being tested.
+
+**Match & replace**
+
+- Rewrite headers, query parameters or bodies on requests **as they pass
+  through the proxy** (`/api/rewrite`), so the target sees the modified values.
+  For headers, `exact` matches the name and sets the value; `contains`/`regex`
+  match inside the value. Regexes are validated on insert, and CR/LF is
+  stripped from replacements (this runs before the request leaves — an
+  unescaped newline would be request splitting).
+- Dashboard **Rewrite…** modal and a TUI screen (`m`).
+
+**TUI parity**
+
+The terminal UI had none of the 0.6 dashboard work. It now has:
+- Host, body, hide-static and highlighted-only filters
+- Host / Path / marker columns instead of one wide URL column
+- `d` to compare two captures, `n` for noise rules (toggle with Enter), `m` for
+  match & replace
+
+### Changed
+
+- Oversized wordlists are refused with a 400 up front instead of being accepted
+  and then failing inside the worker (which showed "attack started" before an
+  error).
+- Intruder payload substitution no longer escapes backslashes: the replacement
+  is now a function, so `re.sub` cannot interpret `\g<0>` as a group
+  reference. This also stops ordinary payloads like `DOMAIN\user` being
+  corrupted.
+
+### Security
+
+- Match-and-replace replacement values have CR/LF stripped, since they are
+  applied to the live request.
+
 ## [0.6.3] — 2026-10-16
 
 The dashboard becomes something you can actually scan on a phone, and
@@ -310,7 +415,8 @@ See the git history (<https://github.com/Zaidux/miniproxy/commits/main>) —
 the pre-0.4 releases were the Riciplay-bundled variant without a standalone
 changelog.
 
-[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.7.0
 [0.6.3]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.3
 [0.6.1]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.0

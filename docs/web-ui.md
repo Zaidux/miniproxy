@@ -123,6 +123,12 @@ Filter to your marked rows with the **Highlighted** chip.
 - **Intruder** — fuzzing results recorded for this request
 - **Note** — the capture's note + a full highlight palette
 
+> **Copying text by hand works.** The live poll skips re-rendering when the
+> output is unchanged, and defers entirely while you hold a selection — so you
+> can drag-select a value and copy it normally. (Dragging inside a row also
+> fires that row's click handler, which used to clear the selection the moment
+> you made it.)
+
 Both body panes have three views:
 
 | View | Shows |
@@ -144,6 +150,46 @@ Action buttons under the tabs:
 - **Highlight…** — the same palette as the ⋮ menu
 - **Note** — jump to the Note tab
 - **To Intruder** — hand this request to the Intruder
+- **Compare…** — diff this capture against another (below)
+
+### Comparing two captures
+
+The access-control workflow. Send the same request twice with one parameter
+changed, then ask *what actually changed* instead of reading two hex dumps.
+Open it with **Compare…** in the detail pane, **Compare…** in the Repeater, or
+**⋮ → Compare**.
+
+Pick **A** and **B** (each via the normal capture picker), and the header names
+the difference — for example `role: 'user' → 'admin'`. Six views:
+
+| View | Shows |
+|------|-------|
+| **What changed** | everything that differs, in one table — the default |
+| **JSON** | structural, keyed by dotted path (`user.role`) |
+| **Tokens** | word-level, for HTML/text; punctuation is a token boundary, so minified pages still localise the change |
+| **Bytes** | both bodies side by side, for exact offsets |
+| **Params** | query parameters and path |
+| **Headers** | header additions, removals and edits |
+
+The mode is chosen automatically for the data present (JSON → tokens → bytes),
+and the summary line names the field rather than just counting them.
+
+### Searching bodies
+
+The **Search bodies…** box filters on the request **and** response body, not
+just the URL. That is where flags, leaked tokens and unexpected parameters
+live, so it is usually faster than scrolling:
+
+```
+Search bodies…   CTF{          → only captures whose body contains it
+Search bodies…   pass=admin    → matched inside a request body too
+```
+
+It is applied in SQL, so it works across the whole DB rather than the loaded
+window, carries into the picker modal and every export, and the same filters
+feed the Intruder. `/api/logs?body=…`, `?exclude_body=…` and `?min_length=`
+are the API equivalents (`min_length` finds the fat interesting response among
+a page of thin ones).
 
 ### Resizing and hiding the detail pane
 
@@ -174,6 +220,43 @@ Two ways in:
 Both the Repeater and the Intruder pick from the same modal and the same
 filters, so you can never end up fuzzing (or replaying) a request the Live
 tab is hiding. The modal header shows which editor "Use it" will fill.
+
+### Tabs and history
+
+The Repeater keeps **multiple tabs**, stored on the server rather than in the
+browser — so a refresh, or moving from your desktop to your phone mid-test,
+does not lose what you were editing. **+ Tab** adds one; the **×** closes it.
+
+Edits **auto-save as you type**, and each tab keeps its **last 50 sends** with
+status and size. Click any entry to bring that response back into the viewer —
+which is how you compare "before" and "after" without re-sending.
+
+### Follow redirects
+
+Off by default. A lab that returns `302` is usually redirecting to a login
+page, and silently following it hides the redirect you are trying to test.
+Tick **Follow redirects** to follow the chain and see the final URL and each
+hop's status.
+
+### Match & replace
+
+The **Rewrite…** button opens the match-and-replace rules. These apply to
+requests **as they pass through the proxy**, before they reach the server — so
+the target sees the modified values. Use it to force a header on every request
+instead of repeating it by hand in the Repeater forty times.
+
+| Target | Kind | Meaning |
+|--------|------|---------|
+| Header | **Exact** | matches the header **name**, and sets its value (`X-Forwarded-For: 1`) |
+| Header | Contains / Regex | matches inside the header **value** |
+| Query / URL | any | rewrites the URL |
+| Body | any | rewrites the body |
+
+Regexes are validated when you add them, and CR/LF is stripped from
+replacements — these run on the live request, so an unescaped newline there
+would be request splitting. Rules are toggled per-row and take effect on new
+traffic immediately. `GET/POST /api/rewrite` and
+`PATCH/DELETE /api/rewrite/<id>` are the API.
 
 Requests are sent by the dashboard process (not through the capture
 proxy), with redirects disabled and TLS verification relaxed for lab use —
@@ -264,19 +347,57 @@ those hosts is skipped at capture time.
 | `GET /api/noise/scan` | dry run: what would be removed, and why |
 | `POST /api/noise/clean` | delete; requires `{"confirm": true}` |
 | `PATCH /api/logs/<id>` | set `highlight` and/or `note` |
+| `GET /api/diff/<a>/<b>` | compare two captures (`?mode=json\|token\|char`) |
+| `GET /api/repeater/tabs` | repeater tabs (+ `history` per tab) |
+| `GET /api/rewrite` | match & replace rules |
+| `GET /api/wordlists` | the bundled wordlists |
 
 All of them accept the shared filters (`host`, `exclude_host`,
-`hide_static`, `highlighted_only`) alongside method/status/url/id.
+`hide_static`, `highlighted_only`, `body`, `exclude_body`, `min_length`)
+alongside method/status/url/id.
 
 ## Intruder tab
 
 1. Pick a logged request — fields prefill.
 2. Insert `§param§` placeholders where payloads go, e.g.
    `https://target.com/item?id=§fuzz§` or `{"user":"§user§"}`.
-3. Upload a wordlist `.txt` (one entry per line, max 1000).
-4. **Start attack** — every payload is substituted into every placeholder
-   and sent; results are color-coded by status and stored in the DB.
+3. Choose a mode:
+
+| Mode | Sends |
+|------|-------|
+| **Single list** | one wordlist substituted into *every* `§placeholder§` |
+| **Pitchfork** | a **different** wordlist per placeholder, combined as a product |
+
+4. **Start attack** — results are color-coded by status and stored in the DB.
 5. Click a row to see the payload's full response.
+
+**Pitchfork** is the one that solves authentication labs: `§user§` from a
+username list crossed with `§pass§` from a password list. The Single list mode
+cannot do it — it can only confirm that `admin` pairs with `admin`.
+
+Switch to Pitchfork and the UI grows **one row per placeholder** it finds in
+the target request. Each row takes a bundled list or your own upload, and the
+line above **Start attack** shows the product before you commit
+(`2 lists → 30 requests`). Combinations are capped at 10,000; over that, shrink
+a list.
+
+### Bundled wordlists
+
+Five curated lists ship in the package so a fresh install can attack without
+hunting for a `.txt` first. Pick one with a click, or upload your own:
+
+| List | For |
+|------|-----|
+| **Numeric IDs** (1–100) | IDOR / broken access control enumeration |
+| **Usernames** | default and lab-common account names |
+| **Common passwords** | obvious defaults for auth testing (local lab use) |
+| **Parameter names** | hidden-parameter discovery |
+| **Ports** | SSRF and redirect validation |
+| **Paths** | admin/API endpoint discovery |
+
+`GET /api/wordlists` lists them; `?name=usernames` returns the words. They are
+deliberately small and curated — a starting point, not a replacement for
+SecLists.
 
 Results are also visible in the Live tab's Intruder pane (select the base
 request) and from the CLI/TUI.

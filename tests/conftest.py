@@ -40,10 +40,16 @@ def app_client(db_path: str, monkeypatch):
     test_db = Database(db_path)
     original_db = appmod.db
     appmod.db = test_db
+    # The intruder job is a module-level global so the API can report on a
+    # background thread. Without this reset, a job left running by one test
+    # makes the next test's start() return 409 and fail for the wrong reason.
+    original_job = appmod._intruder_job
+    appmod._intruder_job = None
     try:
         yield appmod.app.test_client(), test_db, appmod
     finally:
         appmod.db = original_db
+        appmod._intruder_job = original_job
 
 
 @pytest.fixture(autouse=True)

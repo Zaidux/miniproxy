@@ -204,6 +204,68 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
 .rule-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace}
 .rule-row.builtin .grow{color:var(--muted)}
 
+/* ── Diff viewer ─────────────────────────────────────────────────── */
+.diff-picks{display:flex;gap:10px;flex-wrap:wrap}
+.diff-pick{flex:1;min-width:220px;display:flex;align-items:center;gap:8px;
+  background:var(--code);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px}
+.diff-pick b{color:var(--accent)}
+.diff-pick span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:ui-monospace,Menlo,monospace}
+.diff-summary-line{padding:8px 12px;border-radius:6px;background:var(--panel);
+  border:1px solid var(--border);margin-bottom:10px;font-size:13px}
+.diff-summary-line.same{border-color:rgba(63,185,80,.5)}
+.diff-summary-line.different{border-color:rgba(210,153,34,.5)}
+.diff-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.diff-table th{position:static}
+.diff-path{font-family:ui-monospace,Menlo,monospace;color:var(--accent);white-space:nowrap}
+.diff-old{color:var(--red);font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+.diff-new{color:var(--green);font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+.diff-tok{font-family:ui-monospace,Menlo,monospace;padding:1px 4px;border-radius:3px;display:inline-block;margin:1px}
+.diff-tok.same{color:var(--text);background:transparent}
+.diff-tok.only{color:var(--orange);background:rgba(210,153,34,.16)}
+.diff-pair-boxes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.diff-box{background:var(--code);border:1px solid var(--border);border-radius:6px;padding:10px;
+  font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word}
+.diff-box b{display:block;margin-bottom:6px;font-family:inherit;font-size:11px;
+  text-transform:uppercase;color:var(--muted)}
+@media (max-width:700px){.diff-pair-boxes{grid-template-columns:1fr}}
+
+/* ── Match & replace ─────────────────────────────────────────────── */
+.rw-grid{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.rw-grid select{width:auto;flex:0 0 auto}
+.rw-grid input{flex:1;min-width:130px}
+
+/* ── Repeater tabs ───────────────────────────────────────────────── */
+.rep-tabbar{display:flex;gap:4px;align-items:center;overflow-x:auto;
+  padding-bottom:6px;margin-bottom:8px;border-bottom:1px solid var(--border)}
+.rep-tab{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
+  border:1px solid var(--border);border-radius:6px 6px 0 0;background:var(--panel);
+  color:var(--muted);cursor:pointer;font-size:12px;white-space:nowrap;flex:none}
+.rep-tab:hover{color:var(--text);background:var(--border)}
+.rep-tab.active{background:var(--surface);color:var(--text);border-color:var(--accent)}
+.rep-tab .x{opacity:.5;font-size:14px;line-height:1;padding:0 2px}
+.rep-tab .x:hover{opacity:1;color:var(--red)}
+.rep-hist{margin-top:10px}
+.rep-hist-row{display:flex;gap:8px;align-items:center;font-size:12px;
+  padding:4px 8px;border-bottom:1px solid var(--border);cursor:pointer}
+.rep-hist-row:hover{background:var(--border)}
+.rep-hist-row code{font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.follow-box{display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer}
+.follow-box input{width:auto}
+
+/* ── Wordlist picker ─────────────────────────────────────────────── */
+.wl-pick{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.wl-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px}
+.wl-card{background:var(--panel);border:1px solid var(--border);border-radius:6px;
+  padding:9px 11px;cursor:pointer}
+.wl-card:hover{border-color:var(--accent)}
+.wl-card.active{border-color:var(--accent);background:rgba(88,166,255,.1)}
+.wl-card b{display:block;font-size:12.5px}
+.wl-card span{font-size:11px;color:var(--muted)}
+.pf-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.pf-row input[type=number]{width:88px}
+.pf-lists{display:flex;flex-direction:column;gap:6px}
+
 /* ── Connect tab ─────────────────────────────────────────────────── */
 .connect-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
 .connect-grid .card{margin-bottom:0}
@@ -277,6 +339,7 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
       <option value="0">Errors</option><option value="pending">Pending</option>
     </select>
     <input id="filter-url" placeholder="Filter by URL substring…">
+    <input id="filter-body" placeholder="Search bodies…" title="Full-text search of request AND response bodies — where flags, tokens and leaked values actually live">
     <input id="filter-id" placeholder="ID: 42, 1-20, 7" title="Capture ids — comma/space separated, ranges allowed (e.g. 42, 100-200)">
     <label class="toggle-chip" id="chip-static" title="Hide images, fonts, css, js and media captures">
       <input type="checkbox" id="filter-static"> Hide static
@@ -284,6 +347,7 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
     <label class="toggle-chip" id="chip-hl" title="Show only captures you highlighted">
       <input type="checkbox" id="filter-highlighted"> Highlighted
     </label>
+    <button class="btn btn-sm" id="rw-btn" title="Rewrite headers/params on traffic as it passes through">Rewrite…</button>
     <button class="btn btn-sm" id="noise-btn" title="Noise rules, scan and cleanup">Noise…</button>
     <span class="noise-summary" id="noise-summary"></span>
   </div>
@@ -371,6 +435,7 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
           <button class="btn btn-sm" id="d-hl" title="Highlight this capture (Burp-style)">Highlight…</button>
           <button class="btn btn-sm" id="d-note-btn" title="Notes for this capture">Note</button>
           <button class="btn btn-sm" id="d-add-intruder" title="Send this request to the Intruder with §param§ markers">To Intruder</button>
+          <button class="btn btn-sm" id="d-compare" title="Compare this capture with another">Compare…</button>
         </div>
       </div>
     </div>
@@ -413,17 +478,31 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
   <div class="card">
     <div class="card-header">2 · Edit &amp; send</div>
     <div class="card-body">
+      <div class="rep-tabbar" id="rep-tabs">
+        <button class="btn btn-sm" id="rep-newtab" title="New tab">+ Tab</button>
+      </div>
       <div class="form-row-inline">
         <div class="form-row" style="flex:0 0 130px">
           <label>Method</label>
           <select id="rmet"><option>GET</option><option>POST</option><option>PUT</option>
             <option>DELETE</option><option>PATCH</option><option>HEAD</option><option>OPTIONS</option></select>
         </div>
-        <div class="form-row"><label>URL</label><input id="rurl" placeholder="https://target.com/api"></div>
+        <div class="form-row" style="flex:1"><label>URL</label><input id="rurl" placeholder="https://target.com/api"></div>
       </div>
       <div class="form-row"><label>Headers (one per line: Key: Value)</label><textarea id="rhed" rows="6"></textarea></div>
       <div class="form-row"><label>Body</label><textarea id="rbod" rows="8"></textarea></div>
-      <button class="btn btn-primary" id="rsend">Send</button>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <button class="btn btn-primary" id="rsend">Send</button>
+        <label class="follow-box" title="Follow 3xx redirects and show the chain. Off by default: a lab that redirects is often redirecting to a login page.">
+          <input type="checkbox" id="rfollow"> Follow redirects
+        </label>
+        <button class="btn btn-sm" id="r-diff" title="Compare this tab's last response against a captured row">Compare…</button>
+        <span class="text-sm text-muted" id="r-msg"></span>
+      </div>
+      <div class="rep-hist" id="r-hist" style="display:none">
+        <div class="rbody-title" style="margin:0 0 6px">History (newest first)</div>
+        <div id="r-hist-list"></div>
+      </div>
     </div>
   </div>
   <div class="card" id="rresp" style="display:none">
@@ -462,12 +541,30 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
   <div class="card">
     <div class="card-header">2 · Wordlist</div>
     <div class="card-body">
-      <div class="form-row">
-        <label>Upload .txt (one per line, max 1000)</label>
-        <input type="file" id="ifile" accept=".txt">
-        <span id="ifinfo" class="text-sm text-muted"></span>
+      <div class="wl-pick">
+        <button class="btn btn-sm" id="i-mode-single" title="Substitute one word into every placeholder">Single list</button>
+        <button class="btn btn-sm" id="i-mode-pitch" title="A different wordlist per placeholder — e.g. usernames × passwords">Pitchfork</button>
+        <span class="text-sm text-muted" id="i-mode-hint">One wordlist, substituted into every §placeholder§.</span>
       </div>
-      <button class="btn btn-danger" id="istart">Start attack</button>
+
+      <div id="i-single">
+        <div class="form-row">
+          <label>Upload .txt (one per line, max 1000)</label>
+          <input type="file" id="ifile" accept=".txt">
+          <span id="ifinfo" class="text-sm text-muted"></span>
+        </div>
+        <div class="wl-cards" id="wl-cards"></div>
+      </div>
+
+      <div id="i-pitch" style="display:none">
+        <div class="pf-lists" id="pf-lists"></div>
+        <div class="hint" style="margin-top:6px" id="pf-hint"></div>
+      </div>
+
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-danger" id="istart">Start attack</button>
+        <span class="text-sm text-muted" id="i-total"></span>
+      </div>
     </div>
   </div>
   <div class="card" id="ires" style="display:none">
@@ -582,6 +679,7 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
         </select>
         <input id="pk-url" placeholder="URL contains…">
         <input id="pk-host" placeholder="Host contains…" class="host-pick">
+        <input id="pk-body" placeholder="Body contains…">
         <input id="pk-id" placeholder="ID: 42, 1-20, 7" style="max-width:170px">
       </div>
       <div class="form-row-inline" style="gap:8px;align-items:center">
@@ -624,6 +722,76 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
   </div>
   <div class="pop-note">Highlights and notes are saved with the capture and survive
     restarts. Filter by them with the <b>Highlighted</b> chip above.</div>
+</div>
+
+<!-- ══════════ Diff modal (compare two captures) ══════════ -->
+<!-- The access-control workflow: send the same request twice with one
+     parameter changed, then ask what actually changed. -->
+<div class="modal-backdrop" id="diff-modal">
+  <div class="modal" style="width:min(1180px,96vw);height:min(840px,94vh)">
+    <div class="modal-header">
+      <span>Compare captures</span>
+      <span class="text-sm" id="diff-summary"></span>
+      <div class="ml-auto" style="display:flex;gap:8px;align-items:center">
+        <span class="text-sm text-muted" id="diff-pair"></span>
+        <button class="btn btn-sm" id="diff-swap" title="Swap A and B">⇄</button>
+        <button class="btn btn-sm" id="diff-close">Close (Esc)</button>
+      </div>
+    </div>
+    <div class="modal-body" style="gap:8px">
+      <div id="diff-picks" class="diff-picks">
+        <div class="diff-pick"><b>A</b> <span id="diff-a">—</span>
+          <button class="btn btn-sm" data-pick="a">Pick…</button></div>
+        <div class="diff-pick"><b>B</b> <span id="diff-b">—</span>
+          <button class="btn btn-sm" data-pick="b">Pick…</button></div>
+      </div>
+      <div class="btabs" id="diff-tabs">
+        <button class="btab active" data-dpane="fields">What changed</button>
+        <button class="btab" data-dpane="json">JSON</button>
+        <button class="btab" data-dpane="token">Tokens</button>
+        <button class="btab" data-dpane="char">Bytes</button>
+        <button class="btab" data-dpane="params">Params</button>
+        <button class="btab" data-dpane="headers">Headers</button>
+      </div>
+      <div class="card-body" id="diff-body" style="flex:1;overflow:auto;padding:0"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ Rewrite (match & replace) modal ══════════ -->
+<div class="modal-backdrop" id="rewrite-modal">
+  <div class="modal" style="width:min(820px,94vw)">
+    <div class="modal-header">
+      <span>Match &amp; replace</span>
+      <span class="text-sm text-muted" id="rewrite-count"></span>
+      <div class="ml-auto"><button class="btn btn-sm" id="rewrite-close">Close (Esc)</button></div>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin:0 0 10px">
+        Rules are applied to requests <b>as they pass through the proxy</b>,
+        before they reach the server — so the target sees the modified values.
+        For headers, <b>Exact</b> matches the header <i>name</i> and sets its
+        value; <b>Contains</b> and <b>Regex</b> match inside the value.
+      </div>
+      <div class="rw-grid">
+        <select id="rw-target">
+          <option value="header">Header</option>
+          <option value="query">Query / URL</option>
+          <option value="body">Body</option>
+        </select>
+        <select id="rw-kind">
+          <option value="exact">Exact</option>
+          <option value="contains">Contains</option>
+          <option value="regex">Regex</option>
+        </select>
+        <input id="rw-match" placeholder="match (name or substring)">
+        <input id="rw-replace" placeholder="replace with">
+        <button class="btn btn-sm btn-primary" id="rw-add">Add</button>
+      </div>
+      <div id="rw-rules" style="flex:1;min-height:120px;overflow:auto"></div>
+      <div class="hint" id="rw-hint" style="margin-top:6px"></div>
+    </div>
+  </div>
 </div>
 
 <!-- ══════════ Noise modal (rules, dry-run scan, cleanup) ══════════ -->
@@ -869,7 +1037,10 @@ document.querySelectorAll(".tab").forEach(tab => {
     document.getElementById("t-" + tab.dataset.tab).classList.add("active");
     saveSession("mp.tab", tab.dataset.tab);
     if (tab.dataset.tab === "log") loadLog();
-    if (tab.dataset.tab === "repeater" || tab.dataset.tab === "intruder") refreshSel();
+    if (tab.dataset.tab === "repeater" || tab.dataset.tab === "intruder") {
+      refreshSel();
+      if (tab.dataset.tab === "intruder" && iState.mode === "pitchfork") renderPitchRows();
+    }
     if (tab.dataset.tab === "connect") loadConnect();
   });
 });
@@ -886,7 +1057,9 @@ document.querySelectorAll(".dtab").forEach(btn => {
 });
 
 // ── state ────────────────────────────────────────────────────────────
-const state = { rows: [], selectedId: null, logCache: [], token: "" };
+const state = { rows: [], selectedId: null, logCache: [], token: "",
+  _liveHtml: null, _livePending: false, _detailSig: null,
+  _detailPending: false, _swatchSig: null, noteRowId: null, noteDirty: false };
 
 // ── session persistence (survives page refreshes) ────────────────────
 // Captures themselves are restored from the SQLite DB by pollLive(); this
@@ -904,6 +1077,8 @@ function restoreSession() {
     const fs = localStorage.getItem("mp.filter.status");
     const fu = localStorage.getItem("mp.filter.url");
     const fi = localStorage.getItem("mp.filter.id");
+    const fb = localStorage.getItem("mp.filter.body");
+    if (fb) document.getElementById("filter-body").value = fb;
     if (fm) document.getElementById("filter-method").value = fm;
     if (fs) document.getElementById("filter-status").value = fs;
     if (fu) document.getElementById("filter-url").value = fu;
@@ -968,6 +1143,7 @@ function filterValues() {
     host: document.getElementById("filter-host").value,
     hide_static: document.getElementById("filter-static").checked,
     highlighted_only: document.getElementById("filter-highlighted").checked,
+    body: document.getElementById("filter-body").value.trim(),
   };
 }
 function filtersQ(extra) {
@@ -980,6 +1156,7 @@ function filtersQ(extra) {
   if (v.host) p.set("host", v.host);
   // Booleans are always sent (0/1) so clearing a chip is unambiguous
   // server-side rather than "absent means off".
+  if (v.body) p.set("body", v.body);
   p.set("hide_static", v.hide_static ? "1" : "0");
   p.set("highlighted_only", v.highlighted_only ? "1" : "0");
   if (extra) for (const [k, val] of Object.entries(extra)) p.set(k, val);
@@ -1011,10 +1188,66 @@ function matches(r) {
   if (v.host && urlParts(r.url || "").host.toLowerCase().indexOf(v.host.toLowerCase()) === -1) return false;
   if (v.hide_static && isStatic(r)) return false;
   if (v.highlighted_only && !r.highlight) return false;
+  // Body search is a server-side (SQL) filter; the mirror here only makes the
+  // repaint instant for the rows already loaded.
+  if (v.body) {
+    const needle = v.body.toLowerCase();
+    const hay = ((r.response_body || "") + "\n" + (r.body || "")).toLowerCase();
+    if (hay.indexOf(needle) === -1) return false;
+  }
   if (!idMatches(v.id, r.id)) return false;
   return true;
 }
-function renderLive() {
+// ── Live-table rendering (selection-safe) ───────────────────────────
+// Two rules here, both learned the hard way:
+//
+//  1. Never touch the DOM when the output is unchanged. The live poll runs
+//     every 2s; blindly reassigning innerHTML destroys any text selection and
+//     the browser's own find-in-page highlight along with it.
+//  2. Never re-render while the user has an active selection. Dragging to
+//     select text inside a row also fires the row's click handler, so without
+//     this the act of selecting a value (to copy it) re-rendered the table and
+//     cleared the selection instantly — making copy-by-hand impossible.
+//
+// A deferred render is flushed as soon as the selection is dropped.
+function hasSelectionIn(el) {
+  try {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
+    if (!el) return String(sel).length > 0;
+    for (let i = 0; i < sel.rangeCount; i++) {
+      const r = sel.getRangeAt(i);
+      if (el.contains(r.startContainer) || el.contains(r.endContainer)) return true;
+    }
+    return false;
+  } catch (e) { return false; }
+}
+function anySelection() {
+  try {
+    const sel = window.getSelection();
+    return !!(sel && !sel.isCollapsed && String(sel).length);
+  } catch (e) { return false; }
+}
+// Flush any render we skipped because the user was mid-copy.
+function flushDeferredRenders() {
+  if (state._livePending && !anySelection()) {
+    state._livePending = false;
+    renderLive(true);
+  }
+  if (state._detailPending && !anySelection()) {
+    state._detailPending = false;
+    const e = state.rows.find(r => r.id === state.selectedId);
+    if (e) showDetail(e, true);
+  }
+}
+document.addEventListener("selectionchange", () => {
+  // selectionchange fires while dragging; only flush once it settles.
+  clearTimeout(flushDeferredRenders._t);
+  flushDeferredRenders._t = setTimeout(flushDeferredRenders, 120);
+});
+document.addEventListener("mouseup", () => setTimeout(flushDeferredRenders, 50));
+
+function renderLive(force) {
   const tb = document.getElementById("liveb");
   const rows = state.rows.filter(matches);
   const total = state.rows.length;
@@ -1024,33 +1257,44 @@ function renderLive() {
       ? total + (total === 1 ? " capture" : " captures")
       : rows.length + " of " + total + " shown";
   }
+
+  let html;
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="7" class="empty-note">' +
+    html = '<tr><td colspan="7" class="empty-note">' +
       (total ? "No matching requests — every captured row is filtered out. Turn off a chip above."
              : "Waiting for traffic… route the browser through the proxy and the feed fills up.") +
       "</td></tr>";
-    return;
+  } else {
+    html = rows.map(r => {
+      const p = urlParts(r.url);
+      const hl = r.highlight || "";
+      const note = r.note ? " 📝" : "";
+      const title = r.url + note + (hl ? "  · highlighted" : "");
+      const aria = "Actions for capture " + r.id;
+      const menuBtn = '<button class="rowmenu-btn" data-rowmenu="' + r.id +
+        '" aria-label="' + aria + '" title="Highlight, note, resend">⋮</button>';
+      return '<tr class="log-row' + (r.id === state.selectedId ? " selected" : "") +
+        (hl ? " hl-row" : "") + '" data-id="' + r.id + '"' + rowHlStyle(hl) +
+        ' title="' + esc(title) + '">' +
+        "<td>" + r.id + '</td>' +
+        '<td><span class="method ' + mcl(r.method) + '">' + esc(r.method) + "</span></td>" +
+        '<td class="status ' + scls(r.response_code) + '">' + codeLabel(r.response_code) + "</td>" +
+        '<td class="ms-cell">' + fmtSize(respSizeOf(r)) + "</td>" +
+        '<td class="trunc host-cell" title="' + esc(p.host) + '">' + esc(shortHost(p.host)) + "</td>" +
+        '<td class="trunc">' + esc(p.path || "/") +
+          (p.query ? '<span class="text-muted">?' + esc(p.query) + "</span>" : "") + note + "</td>" +
+        '<td class="rowmenu-cell">' + menuBtn + "</td></tr>";
+    }).join("");
   }
-  tb.innerHTML = rows.map(r => {
-    const p = urlParts(r.url);
-    const hl = r.highlight || "";
-    const note = r.note ? " 📝" : "";
-    const title = r.url + note + (hl ? "  · highlighted" : "");
-    const aria = "Actions for capture " + r.id;
-    const menuBtn = '<button class="rowmenu-btn" data-rowmenu="' + r.id +
-      '" aria-label="' + aria + '" title="Highlight, note, resend">⋮</button>';
-    return '<tr class="log-row' + (r.id === state.selectedId ? " selected" : "") +
-      (hl ? " hl-row" : "") + '" data-id="' + r.id + '"' + rowHlStyle(hl) +
-      ' title="' + esc(title) + '">' +
-      "<td>" + r.id + '</td>' +
-      '<td><span class="method ' + mcl(r.method) + '">' + esc(r.method) + "</span></td>" +
-      '<td class="status ' + scls(r.response_code) + '">' + codeLabel(r.response_code) + "</td>" +
-      '<td class="ms-cell">' + fmtSize(respSizeOf(r)) + "</td>" +
-      '<td class="trunc host-cell" title="' + esc(p.host) + '">' + esc(shortHost(p.host)) + "</td>" +
-      '<td class="trunc">' + esc(p.path || "/") +
-        (p.query ? '<span class="text-muted">?' + esc(p.query) + "</span>" : "") + note + "</td>" +
-      '<td class="rowmenu-cell">' + menuBtn + "</td></tr>";
-  }).join("");
+
+  // Identical output → leave the DOM (and any selection) completely alone.
+  if (!force && state._liveHtml === html) return;
+  // A selection inside the table means the user is copying; defer.
+  if (!force && hasSelectionIn(tb)) { state._livePending = true; return; }
+
+  state._liveHtml = html;
+  state._livePending = false;
+  tb.innerHTML = html;
   tb.querySelectorAll("tr.log-row").forEach(tr => {
     tr.addEventListener("click", () => selectRow(parseInt(tr.dataset.id, 10)));
   });
@@ -1065,6 +1309,10 @@ function renderLive() {
 function selectRow(id) {
   state.selectedId = id;
   saveSession("mp.selected", String(id));
+  // No force flag: renderLive() only repaints when the rendered HTML actually
+  // differs, and defers entirely while a selection is active. Dragging inside
+  // a row to select its URL fires this handler too, so forcing a repaint here
+  // was what made copy-by-hand impossible.
   renderLive();
   setExportMenu();
   const e = state.rows.find(x => x.id === id);
@@ -1084,7 +1332,12 @@ async function pollLive() {
     updateNoiseSummary();
     if (state.selectedId != null) {
       const e = state.rows.find(x => x.id === state.selectedId);
-      if (e) showDetail(e); // refresh detail (pending rows fill in)
+      if (e) {
+        // Pending rows fill in over time; skip the repaint while the user is
+        // selecting text in the detail pane and replay it afterwards.
+        if (anySelection()) state._detailPending = true;
+        else showDetail(e);
+      }
     }
     refreshProxyBar();
   } catch (e) {}
@@ -1108,6 +1361,11 @@ document.getElementById("filter-url").addEventListener("input", ev => {
 });
 document.getElementById("filter-id").addEventListener("input", ev => {
   saveSession("mp.filter.id", ev.target.value);
+  renderLive();
+  onFilterTextInput();
+});
+document.getElementById("filter-body").addEventListener("input", ev => {
+  saveSession("mp.filter.body", ev.target.value);
   renderLive();
   onFilterTextInput();
 });
@@ -1221,6 +1479,11 @@ async function loadNoiseRules() {
   const { data } = await api("/api/noise/rules");
   if (data && data.rules) renderNoiseRules(data.rules);
 }
+document.getElementById("rw-btn").addEventListener("click", async () => {
+  rewriteModal.classList.add("open");
+  document.getElementById("rw-hint").textContent = "";
+  await loadRewriteRules();
+});
 document.getElementById("noise-btn").addEventListener("click", async () => {
   noiseModal.classList.add("open");
   document.getElementById("noise-preview").innerHTML = "";
@@ -1595,48 +1858,99 @@ document.querySelectorAll("[data-copy]").forEach(btn => {
   });
 });
 
-function showDetail(e) {
+function showDetail(e, force) {
   const c = e.response_code;
   const reqLen = e.request_body_len || 0, respLen = e.response_body_len || 0;
   const reqTrunc = (e.body || "").length < reqLen ? " · <span title='body stored truncated (see docs/AUDIT.md)'>⚠ truncated to " + (e.body || "").length + "B</span>" : "";
   const respTrunc = respLen > (e.response_body || "").length && (e.response_body || "") !== "" ? " · <span title='body stored truncated'>⚠ truncated to " + (e.response_body || "").length + "B</span>" : "";
+
+  // Everything below is compared against what is already rendered and skipped
+  // when unchanged. The 2s poll calls this on every tick; rewriting identical
+  // text is what used to clear an in-progress selection in these panes.
+  const sig = [e.id, c, e.ttfb_ms, e.total_ms, reqLen, respLen,
+               (e.headers || "").length, (e.response_headers || "").length,
+               (e.body || "").length, (e.response_body || "").length].join("|");
+  if (!force && state._detailSig === sig) {
+    // Content identical — but a row switch still needs the note field synced.
+    syncNoteField(e);
+    return;
+  }
+  state._detailSig = sig;
+
   document.getElementById("req-meta").innerHTML =
     "<b>#" + e.id + "</b> · " + esc(e.method) + " · " +
     '<span class="status ' + scls(c) + '">' + codeLabel(c) + "</span> · " +
     "ttfb " + msLabel(e.ttfb_ms) + "ms · total " + msLabel(e.total_ms) + "ms · " +
     esc(e.url) + reqTrunc + respTrunc;
-  document.getElementById("d-req-line").textContent =
-    (e.method || "") + " " + (e.url || "") + "\n" + fmtH(e.headers);
+
+  setText("d-req-line",
+    (e.method || "") + " " + (e.url || "") + "\n" + fmtH(e.headers));
   state.bodyText.req = (e.body || "") +
     (reqTrunc ? "\n\n⚠ body truncated at " + (e.body || "").length + " B (original " + reqLen + " B)" : "");
   renderBodyView("req");
+
   if (c === null || c === undefined) {
-    document.getElementById("d-resp-h").textContent = "(pending — response not captured yet)";
+    setText("d-resp-h", "(pending — response not captured yet)");
     state.bodyText.resp = "";
     renderBodyView("resp");
   } else if (c === 0) {
     let err = "flow error";
     try { err = (JSON.parse(e.response_headers || "{}")._error) || err; } catch (x) {}
-    document.getElementById("d-resp-h").textContent = "(transport error: " + err + ")";
+    setText("d-resp-h", "(transport error: " + err + ")");
     state.bodyText.resp = "";
     renderBodyView("resp");
   } else {
-    document.getElementById("d-resp-h").textContent = fmtH(e.response_headers);
+    setText("d-resp-h", fmtH(e.response_headers));
     state.bodyText.resp = (e.response_body || "") +
       (respTrunc ? "\n\n⚠ body truncated at " + (e.response_body || "").length + " B (original " + respLen + " B)" : "");
     renderBodyView("resp");
   }
-  // Note + highlight mirror the row's stored values.
-  document.getElementById("d-note").value = e.note || "";
-  document.getElementById("d-note-state").textContent = "";
-  buildSwatches(document.getElementById("d-note-swatches"), col => {
-    setHighlight(e.id, col);
-    buildSwatches(document.getElementById("d-note-swatches"), c2 => {
-      setHighlight(e.id, c2);
-    }, col);
-  }, e.highlight || "");
+
+  syncNoteField(e);
+
+  // Swatches are rebuilt only when the capture or its colour changed;
+  // rebuilding on every poll would drop focus mid-click.
+  const swSig = e.id + "|" + (e.highlight || "");
+  if (state._swatchSig !== swSig) {
+    state._swatchSig = swSig;
+    const paint = col => {
+      setHighlight(e.id, col);
+      state._swatchSig = e.id + "|" + col;
+      buildSwatches(document.getElementById("d-note-swatches"), paint, col);
+    };
+    buildSwatches(document.getElementById("d-note-swatches"), paint, e.highlight || "");
+  }
   const hlBtn = document.getElementById("d-hl");
   if (hlBtn) hlBtn.textContent = e.highlight ? "Highlighted ✓" : "Highlight…";
+}
+
+// Write textContent only when it differs — an identical assignment still
+// collapses the document selection.
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== value) el.textContent = value;
+}
+
+// ── Note field ──────────────────────────────────────────────────────
+// The poll used to assign `.value` unconditionally, so anything typed into the
+// note box was wiped a couple of seconds later — mid-word, which read as "the
+// last word disappears when I press space".
+function syncNoteField(e) {
+  const el = document.getElementById("d-note");
+  if (!el) return;
+  if (state.noteRowId !== e.id) {
+    // Different capture: load its stored note and reset the dirty flag.
+    el.value = e.note || "";
+    state.noteRowId = e.id;
+    state.noteDirty = false;
+    document.getElementById("d-note-state").textContent = "";
+    return;
+  }
+  // Same capture: never touch the field while it holds unsaved edits or has
+  // focus, so typing is never interrupted by a refresh.
+  if (state.noteDirty || document.activeElement === el) return;
+  const stored = e.note || "";
+  if (el.value !== stored) el.value = stored;
 }
 async function loadIntruderPane() {
   const el = document.getElementById("d-int");
@@ -1663,11 +1977,22 @@ document.getElementById("d-note-btn").addEventListener("click", () => {
   document.querySelector('.dtab[data-pane="p-note"]').click();
   document.getElementById("d-note").focus();
 });
+document.getElementById("d-note").addEventListener("input", () => {
+  // Marks unsaved edits so a background poll leaves the field alone.
+  state.noteDirty = true;
+  state.noteRowId = state.selectedId;
+  document.getElementById("d-note-state").textContent = "unsaved…";
+});
 document.getElementById("d-note-save").addEventListener("click", async () => {
   const id = state.selectedId;
   if (id == null) return;
   const note = document.getElementById("d-note").value;
   const ok = await setHighlight(id, undefined, note);
+  if (ok) {
+    const row = state.rows.find(r => r.id === id);
+    if (row) row.note = note;   // so the next poll sees it as already stored
+    state.noteDirty = false;
+  }
   document.getElementById("d-note-state").textContent = ok ? "Saved ✓" : "Failed";
 });
 document.getElementById("d-add-intruder").addEventListener("click", () => {
@@ -1676,6 +2001,9 @@ document.getElementById("d-add-intruder").addEventListener("click", () => {
   document.querySelector('.tab[data-tab="intruder"]').click();
   applyIntruderRequest(id);
   toast("Loaded into Intruder");
+});
+document.getElementById("d-compare").addEventListener("click", () => {
+  openDiff(state.selectedId, diffB && diffB !== state.selectedId ? diffB : null);
 });
 document.getElementById("d-curl").addEventListener("click", () => {
   const e = state.rows.find(x => x.id === state.selectedId);
@@ -1814,6 +2142,7 @@ function pkQuery() {
   // Seeded chips (hide-static / highlighted-only) carry through, so the
   // picker opens on the same view the user is looking at.
   const v = filterValues();
+  if (v.body) p.set("body", v.body);
   p.set("hide_static", v.hide_static ? "1" : "0");
   p.set("highlighted_only", v.highlighted_only ? "1" : "0");
   p.set("limit", "300");
@@ -1828,6 +2157,7 @@ function pkSeed() {
   document.getElementById("pk-url").value = v.url || "";
   document.getElementById("pk-id").value = v.id || "";
   document.getElementById("pk-host").value = v.host || "";
+  document.getElementById("pk-body").value = v.body || "";
 }
 async function pkLoad() {
   pkRows.innerHTML = '<tr><td colspan="5" class="empty-note">Loading…</td></tr>';
@@ -1868,6 +2198,8 @@ function pkChoose(id, tr) {
 function pkUseIt() {
   if (pkChosen == null) return;
   if (pkTarget === "repeater") applyRepeaterRequest(pkChosen);
+  else if (pkTarget === "diff-a") { diffA = pkChosen; diffModal.classList.add("open"); renderDiffPickers(); if (diffB) runDiff(); }
+  else if (pkTarget === "diff-b") { diffB = pkChosen; diffModal.classList.add("open"); renderDiffPickers(); if (diffA && diffA !== diffB) runDiff(); }
   else applyIntruderRequest(pkChosen);
   pickModal.classList.remove("open");
 }
@@ -1882,8 +2214,9 @@ function openPicker(target) {
   pkChosen = null;
   pkUse.disabled = true;
   pkSel.textContent = "Nothing selected";
-  document.getElementById("pick-for").textContent =
-    target === "repeater" ? "→ Repeater" : "→ Intruder";
+  const labels = { repeater: "→ Repeater", intruder: "→ Intruder",
+                   "diff-a": "→ Capture A", "diff-b": "→ Capture B" };
+  document.getElementById("pick-for").textContent = labels[target] || "→ Intruder";
   if (document.getElementById("pk-seeded").checked) pkSeed();
   pickModal.classList.add("open");
   pkLoad();
@@ -1908,33 +2241,61 @@ pkUse.addEventListener("click", pkUseIt);
 document.getElementById("pk-refresh").addEventListener("click", pkLoad);
 pickModal.addEventListener("click", ev => { if (ev.target === pickModal) pickModal.classList.remove("open"); });
 document.addEventListener("keydown", ev => {
-  if (ev.key === "Escape") { pickModal.classList.remove("open"); closeRowMenu(); }
+  if (ev.key === "Escape") {
+    pickModal.classList.remove("open");
+    closeRowMenu();
+    diffModal.classList.remove("open");
+    rewriteModal.classList.remove("open");
+  }
 });
 ["pk-method", "pk-status", "pk-host"].forEach(id =>
   document.getElementById(id).addEventListener("change", pkLoad));
 // Text inputs re-query on a debounce rather than per keystroke.
-["pk-url", "pk-id"].forEach(id =>
+["pk-url", "pk-id", "pk-body"].forEach(id =>
   document.getElementById(id).addEventListener("input", pkDebounced));
 
 // ── repeater tab ─────────────────────────────────────────────────────
 document.getElementById("rsend").addEventListener("click", async () => {
   const btn = document.getElementById("rsend");
+  const msg = document.getElementById("r-msg");
   btn.disabled = true;
+  msg.textContent = "Sending…";
+  const payload = repTabPayload();
+  payload.follow_redirects = document.getElementById("rfollow").checked;
+  const tab = activeRepTab();
   const { ok, data } = await api("/api/repeater/send", {
-    method: "POST",
-    body: JSON.stringify({
-      method: document.getElementById("rmet").value,
-      url: document.getElementById("rurl").value.trim(),
-      headers: parseH(document.getElementById("rhed").value),
-      body: document.getElementById("rbod").value,
-    }),
+    method: "POST", body: JSON.stringify(payload),
   });
   btn.disabled = false;
-  if (!ok || data.error) { alert("Error: " + (data.error || "request failed")); return; }
+  if (!ok || data.error) {
+    msg.textContent = "";
+    if (tab) {
+      await api("/api/repeater/tabs/" + tab.id + "/history", {
+        method: "POST",
+        body: JSON.stringify(Object.assign({ status_code: 0, error: data.error }, payload,
+                                          { headers: payload.headers })),
+      });
+      loadRepHistory(tab.id);
+    }
+    alert("Error: " + (data.error || "request failed"));
+    return;
+  }
+  msg.textContent = "";
   document.getElementById("rresp").style.display = "block";
   document.getElementById("rsc").innerHTML = '<span class="status ' + scls(data.status_code) + '">' + data.status_code + "</span>";
   document.getElementById("rrh").textContent = fmtH(data.headers);
   document.getElementById("rrb").textContent = data.body || "(empty)";
+  if (tab) {
+    await api("/api/repeater/tabs/" + tab.id + "/history", {
+      method: "POST",
+      body: JSON.stringify({
+        method: payload.method, url: payload.url, headers: payload.headers,
+        body: payload.body, status_code: data.status_code,
+        response_headers: data.headers, response_body: data.body,
+      }),
+    });
+    loadRepHistory(tab.id);
+  }
 });
 
 // ── intruder tab ─────────────────────────────────────────────────────
@@ -1948,18 +2309,177 @@ document.getElementById("ifile").addEventListener("change", function () {
   };
   r.readAsText(this.files[0]);
 });
+// ── Intruder: single-list vs pitchfork ─────────────────────────────
+// The old engine put one word into every §placeholder§, so a username ×
+// password attack was impossible. Pitchfork gives each named position its own
+// wordlist, which is how most auth labs are solved.
+const iState = { mode: "single", words: [], pitch: {}, catalog: null };
+
+function setIntruderMode(mode) {
+  iState.mode = mode;
+  const single = mode === "single";
+  document.getElementById("i-single").style.display = single ? "" : "none";
+  document.getElementById("i-pitch").style.display = single ? "none" : "";
+  document.getElementById("i-mode-single").classList.toggle("btn-primary", single);
+  document.getElementById("i-mode-pitch").classList.toggle("btn-primary", !single);
+  document.getElementById("i-mode-hint").textContent = single
+    ? "One wordlist, substituted into every §placeholder§."
+    : "A different wordlist per placeholder — e.g. usernames × passwords.";
+  if (!single) renderPitchRows();
+  updateIntruderTotal();
+}
+document.getElementById("i-mode-single").addEventListener("click", () => setIntruderMode("single"));
+document.getElementById("i-mode-pitch").addEventListener("click", () => setIntruderMode("pitchfork"));
+
+// The placeholders currently present in the target request decide which
+// pitchfork rows exist — you should not have to type names that are not there.
+function currentPlaceholders() {
+  const names = new Set();
+  ["iurl", "ibod", "ihed"].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const found = (el.value || "").match(/§([^§]+)§/g) || [];
+    found.forEach(f => names.add(f.replace(/§/g, "")));
+  });
+  return Array.from(names).sort();
+}
+async function renderPitchRows() {
+  const box = document.getElementById("pf-lists");
+  const names = currentPlaceholders();
+  // Keep any words the user already chose for a placeholder that still exists.
+  Object.keys(iState.pitch).forEach(k => { if (names.indexOf(k) < 0) delete iState.pitch[k]; });
+  names.forEach(n => { if (!(n in iState.pitch)) iState.pitch[n] = { list: "", words: [] }; });
+  if (!names.length) {
+    box.innerHTML = '<div class="empty-note">No §placeholder§ markers in this request yet. ' +
+      "Add some (e.g. <code>?user=§user§&amp;pass=§pass§</code>) and they appear here.</div>";
+    document.getElementById("pf-hint").textContent = "";
+    updateIntruderTotal();
+    return;
+  }
+  // The bundled list catalogue is fetched once and cached: renderPitchRows()
+  // runs whenever a marker changes, so re-fetching each time would be one
+  // request per keystroke.
+  if (!iState.catalog) {
+    const { data } = await api("/api/wordlists");
+    iState.catalog = (data && data.wordlists) || [];
+  }
+  const opts = '<option value="">— choose a bundled list —</option>' +
+    iState.catalog.map(w => '<option value="' + esc(w.name) + '">' +
+      esc(w.title) + " · " + w.count + "</option>").join("");
+  box.innerHTML = names.map(n =>
+    '<div class="pf-row" data-pf="' + esc(n) + '">' +
+    "<code>§" + esc(n) + "§</code>" +
+    '<select data-pflist="' + esc(n) + '" style="flex:1">' + opts + "</select>" +
+    '<input type="file" accept=".txt" data-pffile="' + esc(n) + '" style="flex:1">' +
+    '<span class="text-sm text-muted" data-pfinfo="' + esc(n) + '">' +
+    (iState.pitch[n].words.length
+      ? iState.pitch[n].words.length + " words (" + esc(iState.pitch[n].list) + ")"
+      : "0 words") + "</span></div>").join("");
+  // Re-apply the chosen list so a re-render (e.g. after adding a marker) does
+  // not silently reset a row the user already configured.
+  names.forEach(n => {
+    const sel = box.querySelector('[data-pflist="' + CSS.escape(n) + '"]');
+    if (sel && iState.pitch[n].list) sel.value = iState.pitch[n].list;
+  });
+  box.querySelectorAll("[data-pflist]").forEach(sel => {
+    sel.addEventListener("change", async () => {
+      const name = sel.dataset.pflist;
+      if (!sel.value) {
+        iState.pitch[name] = { list: "", words: [] };
+        updateIntruderTotal();
+        return;
+      }
+      const { data } = await api("/api/wordlists?name=" + encodeURIComponent(sel.value));
+      if (!data || !data.wordlists || !data.wordlists.length) return;
+      const wl = data.wordlists[0];
+      iState.pitch[name] = { list: wl.name, words: wl.words };
+      const info = box.querySelector('[data-pfinfo="' + CSS.escape(name) + '"]');
+      if (info) info.textContent = wl.words.length + " words (" + wl.title + ")";
+      updateIntruderTotal();
+    });
+  });
+  box.querySelectorAll("[data-pffile]").forEach(inp => inp.addEventListener("change", ev => {
+    const name = inp.dataset.pffile;
+    const f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = e => {
+      const words = String(e.target.result || "").split("\n")
+        .map(x => x.trim()).filter(x => x && !x.startsWith("#"));
+      iState.pitch[name] = { list: f.name, words: words.slice(0, 1000) };
+      const info = box.querySelector('[data-pfinfo="' + CSS.escape(name) + '"]');
+      if (info) info.textContent = words.length + " words (uploaded)";
+      updateIntruderTotal();
+    };
+    r.readAsText(f);
+  }));
+  updateIntruderTotal();
+}
+
+function updateIntruderTotal() {
+  const el = document.getElementById("i-total");
+  if (!el) return;
+  if (iState.mode === "single") {
+    el.textContent = iState.words.length ? iState.words.length + " requests queued" : "";
+    return;
+  }
+  const sizes = Object.values(iState.pitch).map(p => (p.words || []).length).filter(n => n > 0);
+  if (!sizes.length) { el.textContent = ""; return; }
+  let total = 1;
+  sizes.forEach(n => total *= n);
+  el.textContent = sizes.length + " list(s) → " + total + " requests" +
+    (total > 10000 ? "  ⚠ over the 10000 limit" : "");
+  document.getElementById("pf-hint").textContent =
+    "Lists combine as a product: " + sizes.join(" × ") + " = " + total + " requests.";
+}
+
+// Bundled wordlist cards for the single-list mode.
+async function loadWordlistCards() {
+  const box = document.getElementById("wl-cards");
+  if (!box) return;
+  const { data } = await api("/api/wordlists");
+  const lists = (data && data.wordlists) || [];
+  box.innerHTML = lists.map(w =>
+    '<div class="wl-card" data-wl="' + esc(w.name) + '">' +
+    "<b>" + esc(w.title) + " · " + w.count + "</b><span>" + esc(w.description) + "</span></div>"
+  ).join("");
+  box.querySelectorAll("[data-wl]").forEach(card => card.addEventListener("click", async () => {
+    const { data: d } = await api("/api/wordlists?name=" + encodeURIComponent(card.dataset.wl));
+    if (!d || !d.wordlists || !d.wordlists.length) return;
+    iState.words = d.wordlists[0].words;
+    box.querySelectorAll("[data-wl]").forEach(c => c.classList.remove("active"));
+    card.classList.add("active");
+    document.getElementById("ifinfo").textContent =
+      d.wordlists[0].words.length + " words from the bundled “" + d.wordlists[0].title + "” list.";
+    updateIntruderTotal();
+  }));
+}
 document.getElementById("istart").addEventListener("click", async () => {
   const rid = document.getElementById("isel").value;
   if (!rid) { alert("Select a request."); return; }
-  if (!words.length) { alert("Upload a wordlist."); return; }
+  // Attacks run server-side in a background thread — start them, then poll
+  // /api/intruder/status for progress instead of blocking the UI.
+  let body;
+  if (iState.mode === "single") {
+    if (!words.length) { alert("Pick a bundled list or upload a wordlist."); return; }
+    body = { request_id: parseInt(rid, 10), wordlist: words.slice(0, 1000) };
+  } else {
+    const lists = {};
+    Object.keys(iState.pitch).forEach(n => {
+      if (iState.pitch[n].words && iState.pitch[n].words.length) lists[n] = iState.pitch[n].words;
+    });
+    if (!Object.keys(lists).length) {
+      alert("Choose a wordlist for at least one placeholder."); return;
+    }
+    renderPitchRows(); // keep the displayed words in step with what is sent
+    body = { request_id: parseInt(rid, 10), mode: "pitchfork", lists: lists };
+  }
   const btn = document.getElementById("istart");
   btn.disabled = true; btn.textContent = "Running…";
   try {
-    // Attacks run server-side in a background thread — start them, then
-    // poll /api/intruder/status for progress instead of blocking the UI.
     const { ok, data } = await api("/api/intruder/start", {
       method: "POST",
-      body: JSON.stringify({ request_id: parseInt(rid, 10), wordlist: words.slice(0, 1000) }),
+      body: JSON.stringify(body),
     });
     if (!ok || data.error) { alert(data.error || "attack failed"); return; }
     document.getElementById("icnt").textContent = "0 / " + data.total + " requests";
@@ -2044,6 +2564,334 @@ document.getElementById("clear-btn").addEventListener("click", async () => {
   document.getElementById("d-int").textContent = "(none yet — run one from the Intruder tab)";
 });
 
+// ── Diff viewer ─────────────────────────────────────────────────────
+// The access-control workflow: compare two captures and read off what the
+// changed parameter actually did. Reachable from the detail pane, the repeater
+// and the ⋮ menu.
+const diffModal = document.getElementById("diff-modal");
+let diffA = null, diffB = null, diffResult = null, diffBodies = null;
+const diffMode = "auto";
+let diffPane = "fields";
+
+function openDiff(aId, bId) {
+  diffA = aId || null;
+  diffB = bId || null;
+  diffBodies = null;
+  diffResult = null;
+  renderDiffPickers();
+  diffModal.classList.add("open");
+  if (aId && bId && aId !== bId) runDiff();
+  else document.getElementById("diff-body").innerHTML =
+    '<div class="empty-note">Pick two different captures to compare.</div>';
+}
+function renderDiffPickers() {
+  const row = id => {
+    const r = state.rows.find(x => x.id === id) || state.logCache.find(x => x.id === id);
+    return r ? "#" + r.id + " · " + r.method + " " + String(r.url || "").slice(0, 60) : "—";
+  };
+  document.getElementById("diff-a").textContent = row(diffA);
+  document.getElementById("diff-b").textContent = row(diffB);
+  document.getElementById("diff-pair").textContent =
+    (diffA ? "#" + diffA : "—") + " vs " + (diffB ? "#" + diffB : "—");
+}
+async function runDiff() {
+  if (!diffA || !diffB) return;
+  const out = document.getElementById("diff-body");
+  out.innerHTML = '<div class="empty-note">Comparing…</div>';
+  const { ok, data } = await api("/api/diff/" + diffA + "/" + diffB +
+                                "?mode=" + encodeURIComponent(diffMode) +
+                                "&include_bodies=1");
+  if (!ok) {
+    out.innerHTML = '<div class="empty-note">' + esc(data.error || "diff failed") + "</div>";
+    document.getElementById("diff-summary").textContent = "";
+    return;
+  }
+  diffResult = data;
+  diffBodies = { a: { response_body: data.body_a || "" },
+                 b: { response_body: data.body_b || "" } };
+  document.getElementById("diff-summary").innerHTML =
+    '<span class="status ' + (data.identical ? "s-2xx" : "s-4xx") + '">' +
+    esc(data.summary) + "</span>";
+  renderDiffPane();
+}
+function cell(v) { return esc(v === undefined || v === null ? "—" : v); }
+function diffTable(entries) {
+  const rows = entries || [];
+  if (!rows.length) return '<div class="empty-note">Nothing here changed.</div>';
+  return '<table class="diff-table"><thead><tr><th style="width:34%">What</th>' +
+    "<th>A</th><th>B</th></tr></thead><tbody>" +
+    rows.map(e => '<tr><td class="diff-path">' + cell(e.name || e.path) +
+      '</td><td class="diff-old">' + cell(e.a) + '</td><td class="diff-new">' +
+      cell(e.b) + "</td></tr>").join("") + "</tbody></table>";
+}
+function section(title, entries) {
+  if (!entries || !entries.length) return "";
+  return entries.map(e => '<tr><td class="diff-path sect">' + title + " · " +
+    cell(e.name || e.path) + '</td><td class="diff-old">' + cell(e.a) +
+    '</td><td class="diff-new">' + cell(e.b) + "</td></tr>").join("");
+}
+function renderDiffPane() {
+  const out = document.getElementById("diff-body");
+  if (!diffResult) return;
+  const d = diffResult;
+  let html = "";
+  if (diffPane === "fields") {
+    let rows = "";
+    if (d.status !== "same") {
+      rows += '<tr><td class="diff-path sect">status</td><td class="diff-old">' +
+        cell(d.a.status) + '</td><td class="diff-new">' + cell(d.b.status) + "</td></tr>";
+    }
+    if (d.params.path_changed) {
+      rows += '<tr><td class="diff-path">path</td><td class="diff-old">' +
+        cell(d.params.path_a) + '</td><td class="diff-new">' +
+        cell(d.params.path_b) + "</td></tr>";
+    }
+    rows += section("param", d.params.changed);
+    rows += section("param +", d.params.added);
+    rows += section("param -", d.params.removed);
+    rows += section("header", d.headers.changed);
+    rows += section("header +", d.headers.added);
+    const body = d.body || {};
+    if (body.applicable && d.mode === "json") {
+      rows += section("json", body.changed);
+      rows += section("json +", body.added);
+      rows += section("json -", body.removed);
+    }
+    html = '<table class="diff-table"><thead><tr><th style="width:34%">What</th>' +
+      "<th>A</th><th>B</th></tr></thead><tbody>" +
+      (rows || '<tr><td colspan="3" class="empty-note">Identical.</td></tr>') +
+      "</tbody></table>";
+  } else if (diffPane === "json") {
+    const b = d.body || {};
+    html = (b.applicable && d.mode === "json")
+      ? diffTable([].concat(b.changed || [], b.added || [], b.removed || []))
+      : '<div class="empty-note">Neither body is JSON — try Tokens or Bytes.</div>';
+  } else if (diffPane === "token") {
+    const rows = (d.body || {}).rows;
+    html = Array.isArray(rows)
+      ? rows.slice(0, 3000).map(r => '<span class="diff-tok ' +
+        (r.common ? "same" : "only") + '">' + esc(r.token) + "</span>").join("")
+      : '<div class="empty-note">No token view — use Bytes.</div>';
+  } else if (diffPane === "char") {
+    html = '<div class="diff-pair-boxes">' +
+      '<div class="diff-box"><b>A body</b>' +
+      esc(diffBodies && diffBodies.a.response_body ? diffBodies.a.response_body : "(empty)") +
+      "</div><div class=\"diff-box\"><b>B body</b>" +
+      esc(diffBodies && diffBodies.b.response_body ? diffBodies.b.response_body : "(empty)") +
+      "</div></div>";
+  } else if (diffPane === "params") {
+    const p = d.params;
+    html = '<div class="diff-summary-line">' +
+      (p.path_changed ? "Path changed" : "Same path") + ": " + esc(p.path_a) +
+      (p.path_changed ? " → " + esc(p.path_b) : "") + "</div>" +
+      diffTable([].concat(p.changed || [], p.added || [], p.removed || []));
+  } else if (diffPane === "headers") {
+    const h = d.headers;
+    html = diffTable([].concat(h.changed || [], h.added || [], h.removed || []));
+  }
+  out.innerHTML = html;
+}
+document.getElementById("diff-tabs").addEventListener("click", ev => {
+  const t = ev.target.closest(".btab");
+  if (!t) return;
+  document.querySelectorAll("#diff-tabs .btab").forEach(b => b.classList.remove("active"));
+  t.classList.add("active");
+  diffPane = t.dataset.dpane;
+  renderDiffPane();
+});
+document.querySelectorAll("[data-pick]").forEach(b =>
+  b.addEventListener("click", () => openPicker(b.dataset.pick)));
+document.getElementById("diff-swap").addEventListener("click", () => {
+  const t = diffA; diffA = diffB; diffB = t;
+  renderDiffPickers();
+  if (diffA && diffB && diffA !== diffB) runDiff();
+});
+document.getElementById("diff-close").addEventListener("click", () => diffModal.classList.remove("open"));
+diffModal.addEventListener("click", ev => {
+  if (ev.target === diffModal) diffModal.classList.remove("open");
+});
+
+// ── Repeater tabs + per-tab history ─────────────────────────────────
+// Tabs are server-side rows, so a refresh — or opening the dashboard on your
+// phone instead of the desktop — keeps the request you were editing.
+const repState = { tabs: [], activeId: null };
+function renderRepTabs() {
+  const bar = document.getElementById("rep-tabs");
+  const newBtn = document.getElementById("rep-newtab");
+  bar.innerHTML = "";
+  bar.appendChild(newBtn);
+  repState.tabs.forEach(t => {
+    const b = document.createElement("button");
+    b.className = "rep-tab" + (t.id === repState.activeId ? " active" : "");
+    const label = t.title || t.url || ("tab " + t.id);
+    b.innerHTML = "<span>" + esc(label.slice(0, 34)) + "</span>" +
+      '<span class="x" data-close="' + t.id + '" title="Close tab">×</span>';
+    b.addEventListener("click", ev => {
+      if (ev.target.dataset && ev.target.dataset.close) return;
+      loadRepTab(t.id);
+    });
+    bar.appendChild(b);
+  });
+  bar.querySelectorAll("[data-close]").forEach(x =>
+    x.addEventListener("click", async ev => {
+      ev.stopPropagation();
+      await api("/api/repeater/tabs/" + x.dataset.close, { method: "DELETE" });
+      if (repState.activeId === parseInt(x.dataset.close, 10)) repState.activeId = null;
+      await loadRepTabs();
+    }));
+}
+function activeRepTab() {
+  return repState.tabs.find(t => t.id === repState.activeId) || null;
+}
+function repTabPayload() {
+  return {
+    method: document.getElementById("rmet").value,
+    url: document.getElementById("rurl").value.trim(),
+    headers: parseH(document.getElementById("rhed").value),
+    body: document.getElementById("rbod").value,
+  };
+}
+async function saveRepTab() {
+  const tab = activeRepTab();
+  if (!tab) return;
+  await api("/api/repeater/tabs/" + tab.id, {
+    method: "PATCH", body: JSON.stringify(repTabPayload()),
+  });
+}
+async function loadRepTab(id) {
+  const { ok, data } = await api("/api/repeater/tabs/" + id);
+  if (!ok || !data.tab) return;
+  const t = data.tab;
+  document.getElementById("rmet").value = t.method || "GET";
+  document.getElementById("rurl").value = t.url || "";
+  document.getElementById("rhed").value = fmtH(t.headers || {});
+  document.getElementById("rbod").value = t.body || "";
+  repState.activeId = t.id;
+  renderRepTabs();
+  await loadRepHistory(t.id);
+}
+async function loadRepHistory(tabId) {
+  const { ok, data } = await api("/api/repeater/tabs/" + tabId + "/history");
+  const box = document.getElementById("r-hist");
+  const list = document.getElementById("r-hist-list");
+  const hist = (ok && data.history) || [];
+  if (!hist.length) { box.style.display = "none"; return; }
+  box.style.display = "block";
+  list.innerHTML = hist.map(h =>
+    '<div class="rep-hist-row" data-hid="' + h.id + '">' +
+    '<span class="status ' + scls(h.status_code) + '">' + codeLabel(h.status_code) + "</span>" +
+    "<code>" + esc((h.method || "GET") + " " + (h.url || "")) + "</code>" +
+    '<span class="ms-cell">' + fmtSize((h.response_body || "").length) + "</span>" +
+    '<span class="text-sm text-muted">' + (h.error ? esc(h.error) : whenSeen(h.created)) +
+    "</span></div>").join("");
+  list.querySelectorAll("[data-hid]").forEach(row => row.addEventListener("click", () => {
+    const h = hist.find(x => x.id === parseInt(row.dataset.hid, 10));
+    if (!h) return;
+    document.getElementById("rresp").style.display = "block";
+    document.getElementById("rsc").innerHTML =
+      '<span class="status ' + scls(h.status_code) + '">' + codeLabel(h.status_code) + "</span>";
+    document.getElementById("rrh").textContent = fmtH(h.response_headers || {});
+    document.getElementById("rrb").textContent = h.response_body || "(empty)";
+  }));
+}
+async function loadRepTabs() {
+  const { ok, data } = await api("/api/repeater/tabs");
+  repState.tabs = (ok && data.tabs) || [];
+  if (!repState.tabs.length) {
+    // Always keep one tab open so the editor is never a dead form.
+    const created = await api("/api/repeater/tabs", {
+      method: "POST", body: JSON.stringify({ title: "Tab 1" }),
+    });
+    if (created.ok && created.data.tab) {
+      repState.tabs = [created.data.tab];
+      repState.activeId = created.data.tab.id;
+    }
+  }
+  if (!repState.activeId && repState.tabs.length) repState.activeId = repState.tabs[0].id;
+  renderRepTabs();
+  if (repState.activeId) await loadRepTab(repState.activeId);
+}
+document.getElementById("rep-newtab").addEventListener("click", async () => {
+  const { ok, data } = await api("/api/repeater/tabs", {
+    method: "POST", body: JSON.stringify({ title: "Tab " + (repState.tabs.length + 1) }),
+  });
+  if (ok && data.tab) {
+    repState.activeId = data.tab.id;
+    await loadRepTabs();
+    document.getElementById("rurl").focus();
+  }
+});
+document.getElementById("r-diff").addEventListener("click", () => {
+  if (state.selectedId == null) { toast("Select a captured row in Live first", true); return; }
+  openDiff(state.selectedId, diffB && diffB !== state.selectedId ? diffB : null);
+});
+// Debounced auto-save so edits survive a refresh or a device switch.
+let repSaveTimer = null;
+function scheduleRepSave() {
+  if (!activeRepTab()) return;
+  clearTimeout(repSaveTimer);
+  repSaveTimer = setTimeout(saveRepTab, 600);
+}
+["rmet", "rurl", "rhed", "rbod"].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener("input", scheduleRepSave);
+  el.addEventListener("change", scheduleRepSave);
+});
+
+// ── Match & replace ─────────────────────────────────────────────────
+const rewriteModal = document.getElementById("rewrite-modal");
+function renderRewriteRules(rules) {
+  const box = document.getElementById("rw-rules");
+  const on = rules.filter(r => r.enabled).length;
+  document.getElementById("rewrite-count").textContent =
+    on + " of " + rules.length + " active";
+  box.innerHTML = rules.map(r =>
+    '<div class="rule-row">' +
+    '<input type="checkbox" data-rw="' + r.id + '"' + (r.enabled ? " checked" : "") +
+      ' style="width:auto;flex:none" aria-label="Enable rewrite rule">' +
+    '<span class="grow" title="' + esc(r.match) + '">' +
+      esc(r.kind) + " " + esc(r.target) + " · " + esc(r.match) +
+      (r.replace ? " → " + esc(r.replace) : " → (empty)") + "</span>" +
+    '<button class="btn btn-sm" data-rwdel="' + r.id + '">Remove</button></div>'
+  ).join("") || '<div class="empty-note">No rules — traffic passes through untouched.</div>';
+  box.querySelectorAll("[data-rw]").forEach(cb => cb.addEventListener("change", async ev => {
+    const { data } = await api("/api/rewrite/" + cb.dataset.rw, {
+      method: "PATCH", body: JSON.stringify({ enabled: ev.target.checked }),
+    });
+    if (data && data.rules) renderRewriteRules(data.rules);
+    toast(ev.target.checked ? "Rule active" : "Rule disabled");
+  }));
+  box.querySelectorAll("[data-rwdel]").forEach(b => b.addEventListener("click", async () => {
+    const { data } = await api("/api/rewrite/" + b.dataset.rwdel, { method: "DELETE" });
+    if (data && data.rules) renderRewriteRules(data.rules);
+  }));
+}
+async function loadRewriteRules() {
+  const { data } = await api("/api/rewrite");
+  if (data && data.rules) renderRewriteRules(data.rules);
+}
+document.getElementById("rw-add").addEventListener("click", async () => {
+  const body = {
+    target: document.getElementById("rw-target").value,
+    kind: document.getElementById("rw-kind").value,
+    match: document.getElementById("rw-match").value.trim(),
+    replace: document.getElementById("rw-replace").value,
+  };
+  const { ok, data } = await api("/api/rewrite", { method: "POST", body: JSON.stringify(body) });
+  if (!ok) { toast(data.error || "could not add rule", true); return; }
+  document.getElementById("rw-match").value = "";
+  document.getElementById("rw-replace").value = "";
+  renderRewriteRules(data.rules);
+  toast("Rule active on new traffic");
+});
+document.getElementById("rw-match").addEventListener("keydown", ev => {
+  if (ev.key === "Enter") document.getElementById("rw-add").click();
+});
+document.getElementById("rewrite-close").addEventListener("click", () => rewriteModal.classList.remove("open"));
+rewriteModal.addEventListener("click", ev => {
+  if (ev.target === rewriteModal) rewriteModal.classList.remove("open");
+});
+
 // ── connect tab (route any browser/device through MiniProxy) ─────────
 let connectLoaded = false;
 async function loadConnect() {
@@ -2122,6 +2970,9 @@ loadDevicesDash();
 // so the first pollLive() already queries with the user's saved filters
 // instead of briefly rendering an unfiltered table.
 restoreSession();
+loadRepTabs();
+loadWordlistCards();
+setIntruderMode("single");
 pollLive();
 setInterval(pollLive, 2000);
 setInterval(refreshHostOptions, 15000);

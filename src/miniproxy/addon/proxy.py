@@ -21,6 +21,7 @@ Bundle v4 additions:
 
 import json
 import os
+import re
 import time
 
 from mitmproxy.http import HTTPFlow
@@ -44,6 +45,82 @@ _API_CONTENT_TYPES: set[str] = {
 def _is_api_content(content_type: str) -> bool:
     ct = (content_type or "").lower().split(";")[0].strip()
     return ct in _API_CONTENT_TYPES
+
+
+def apply_rewrite_rules(db: "Database", headers: dict, url: str,
+                        body: str) -> tuple[dict, str, str, int]:
+    """Apply enabled match-and-replace rules to a request in flight.
+
+    Burp's Proxy history rules. The point is to avoid a manual repeater
+    round-trip for a header you need on every request — forcing a role, pinning
+    a version header, rewriting a redirect target.
+
+    Header semantics differ by kind, which matches how people actually want to
+    use them:
+
+    * ``exact``   — matches the header **name**, and ``replace`` is its new
+      value. "Always send ``X-Forwarded-For: 1``."
+    * ``contains``/``regex`` — match inside the header **value**.
+
+    Returns ``(headers, url, body, count)``. Rules are applied in id order and
+    each header value is rewritten at most once per request, so two rules
+    cannot fight over the same value in an order the user cannot predict.
+
+    CR/LF in a replacement is stripped: this runs before the request leaves,
+    so an unescaped newline here would be request splitting.
+    """
+    rules = db.get_rewrite_rules(enabled_only=True)
+    if not rules:
+        return headers, url, body, 0
+    applied = 0
+    for rule in rules:
+        needle = str(rule.get("match") or "")
+        if not needle:
+            continue
+        replacement = str(rule.get("replace") or "").replace("\r", "").replace("\n", "")
+        kind = rule.get("kind") or "exact"
+        target = rule.get("target") or "header"
+        if target == "header" and kind == "exact":
+            # Match on the name and set the value — the common case.
+            for name in list(headers):
+                if str(name).lower() == needle.lower():
+                    if headers[name] != replacement:
+                        headers[name] = replacement
+                        applied += 1
+            continue
+        if kind == "regex":
+            try:
+                pattern = re.compile(needle)
+            except re.error:
+                # Validated on insert; skip rather than fail the whole request.
+                continue
+            hit, sub = pattern.search, pattern.sub
+        else:
+            hit = sub = None  # type: ignore[assignment]
+
+        if target == "header":
+            for name in list(headers):
+                value = str(headers[name])
+                if kind == "regex":
+                    if hit(value):
+                        headers[name] = sub(replacement, value)
+                        applied += 1
+                elif needle in value:
+                    headers[name] = value.replace(needle, replacement)
+                    applied += 1
+        else:
+            source = url if target == "query" else body
+            if kind == "regex":
+                new = sub(replacement, source)
+            else:
+                new = source.replace(needle, replacement) if needle in source else source
+            if new != source:
+                if target == "query":
+                    url = new
+                else:
+                    body = new
+                applied += 1
+    return headers, url, body, applied
 
 
 def host_in_scope(host: str, scope_entries: list[str]) -> bool:
@@ -141,11 +218,38 @@ class MiniProxyAddon:
         # on a per-DB "intercept" config flag that defaults to absent/False on
         # every fresh session DB — which silently produced proxies that routed
         # traffic but captured nothing (empty flows).
+        headers = dict(req.headers)
+        body = req.text or ""
+        url = req.pretty_url
+
+        # Match & replace, applied before the request goes upstream. The
+        # rewritten request is what leaves the proxy — this is interception,
+        # not post-hoc annotation, so the *upstream* sees the modified values.
+        headers, url, body, rewritten = apply_rewrite_rules(
+            self.db, headers, url, body
+        )
+        if rewritten:
+            self._rewrites = getattr(self, "_rewrites", 0) + rewritten
+            if headers != dict(req.headers):
+                req.headers = headers
+            if body != (req.text or ""):
+                try:
+                    req.text = body
+                except (ValueError, UnicodeError):
+                    # Binary bodies cannot round-trip through .text; leaving
+                    # the original content is better than breaking the request.
+                    body = req.text or ""
+            if url != req.pretty_url:
+                # pretty_url is derived; set it so downstream capture and the
+                # upstream request agree.
+                req.url = url
+                flow.request = req
+
         req_id = self.db.store_request(
             method=req.method,
-            url=req.pretty_url,
-            headers=dict(req.headers),
-            body=req.text or "",
+            url=url,
+            headers=headers,
+            body=body,
         )
         flow._miniproxy_id = req_id
         flow._miniproxy_t0 = time.monotonic()

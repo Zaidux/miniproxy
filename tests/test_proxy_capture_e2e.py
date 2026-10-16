@@ -35,9 +35,22 @@ def _free_port() -> int:
 
 
 def _rows(db_path: str) -> list[tuple]:
+    """Captured rows, tolerating a not-yet-created DB.
+
+    mitmdump creates the capture DB when the addon is constructed, which can
+    be a moment after the proxy socket starts accepting. Treating a missing
+    table as "nothing captured yet" keeps the polling helpers from blowing up
+    on a race that is not the test's subject.
+    """
+    if not os.path.exists(db_path):
+        return []
     conn = sqlite3.connect(db_path)
     try:
         return list(conn.execute("SELECT id, url FROM requests ORDER BY id"))
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return []
+        raise
     finally:
         conn.close()
 

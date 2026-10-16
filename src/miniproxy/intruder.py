@@ -32,15 +32,45 @@ class Intruder:
         return sorted(matches)
 
     @staticmethod
-    def replace_placeholders(text: str, payload: str) -> str:
-        """Replace every §...§ in text with the given payload."""
-        # Strip CR/LF from payloads so a wordlist entry can never break the
-        # request out of its header / URL / body boundaries (HTTP request
-        # smuggling primitives live exactly in this mistake). Escape any
-        # backslashes so re.sub never interprets them as group references.
-        safe = str(payload).replace("\r", "").replace("\n", "")
-        safe = safe.replace("\\", "\\\\")
-        return re.sub(r"§[^§]+§", safe, text)
+    def positions_of(text: str) -> dict[str, int]:
+        """How many times each placeholder name occurs."""
+        counts: dict[str, int] = {}
+        for m in re.finditer(r"§([^§]+)§", text):
+            counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+        return counts
+
+    @staticmethod
+    def replace_placeholders(text: str, payload: str,
+                            payloads: dict[str, str] | None = None) -> str:
+        """Substitute payloads into ``§placeholder§`` markers.
+
+        With ``payloads`` (name → value) each named position gets its own
+        value, which is what makes pitchfork attacks possible: usernames from
+        one list, passwords from another. Without it, every position receives
+        the single ``payload`` — the original behaviour, kept for the
+        single-list case.
+        """
+        # Strip CR/LF from payloads so a wordlist entry can never break
+        # the request out of its header / URL / body boundaries (HTTP request
+        # smuggling primitives live exactly in this mistake).
+        #
+        # Backslashes are NOT escaped. The replacement is a *function*, and
+        # re.sub returns a function's value verbatim — so a literal "\g<0>" in
+        # a wordlist is sent as those characters instead of being silently
+        # swallowed as a group reference. (The previous string-replacement form
+        # had to escape them; doing so now would double-escape every backslash
+        # and corrupt ordinary payloads like "DOMAIN\user".)
+        def clean(value: str) -> str:
+            return str(value).replace("\r", "").replace("\n", "")
+
+        shared = clean(payload)
+        by_name = {k: clean(v) for k, v in (payloads or {}).items()}
+
+        def _sub(match: "re.Match[str]") -> str:
+            name = match.group(1)
+            return by_name.get(name, shared)
+
+        return re.sub(r"§([^§]+)§", _sub, text)
 
     def run_attack(
         self,
@@ -78,19 +108,68 @@ class Intruder:
 
         return results
 
+    MAX_COMBOS = 10_000
+
+    def run_pitchfork(self, base_request: dict[str, Any],
+                      lists: dict[str, list[str]],
+                      target_id: int) -> list[dict[str, Any]]:
+        """Fuzz several positions with *different* wordlists at once.
+
+        This is what most authentication labs need: ``§user§`` from one list
+        crossed with ``§pass§`` from another. The old engine substituted one
+        word into every position, so a username×password attack was impossible
+        — you could only confirm that "admin" paired with "admin" works.
+
+        ``lists`` maps a placeholder name to its wordlist. A position with no
+        entry keeps its literal ``§name§`` text in the request, so the result
+        rows say exactly what was sent.
+        """
+        from itertools import product
+
+        usable = {k: v for k, v in lists.items() if v}
+        if not usable:
+            raise IntruderError("pitchfork needs at least one wordlist")
+
+        sizes = [len(v) for v in usable.values()]
+        combos = 1
+        for size in sizes:
+            combos *= size
+        if combos > self.MAX_COMBOS:
+            raise IntruderError(
+                f"pitchfork would send {combos} requests "
+                f"(max {self.MAX_COMBOS}) — shrink a list"
+            )
+
+        names = list(usable)
+        results: list[dict[str, Any]] = []
+        for combo in product(*(usable[n] for n in names)):
+            payloads = dict(zip(names, combo))
+            modified = self._apply_payload(base_request, "", payloads)
+            outcome = self._send(modified)
+            # A readable label beats "a×b" — this string is what the results
+            # table groups and searches by.
+            outcome["payload"] = " | ".join(
+                f"{n}={v}" for n, v in payloads.items()
+            )
+            outcome["payloads"] = payloads
+            outcome["request_id"] = target_id
+            results.append(outcome)
+        return results
+
     def _apply_payload(
-        self, base: dict[str, Any], payload: str
+        self, base: dict[str, Any], payload: str,
+        payloads: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Create a copy of the base request with all §placeholders§ replaced."""
-        url = self.replace_placeholders(base.get("url", ""), payload)
-        body = self.replace_placeholders(base.get("body", ""), payload)
+        """Create a copy of the base request with the §placeholders§ replaced."""
+        url = self.replace_placeholders(base.get("url", ""), payload, payloads)
+        body = self.replace_placeholders(base.get("body", ""), payload, payloads)
         raw_headers = base.get("headers", {})
         if isinstance(raw_headers, str):
             raw_headers = json.loads(raw_headers)
         new_headers = {}
         for k, v in dict(raw_headers).items():
-            new_headers[self.replace_placeholders(k, payload)] = (
-                self.replace_placeholders(v, payload)
+            new_headers[self.replace_placeholders(k, payload, payloads)] = (
+                self.replace_placeholders(v, payload, payloads)
             )
         return {
             "method": base.get("method", "GET"),

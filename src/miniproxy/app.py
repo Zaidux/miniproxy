@@ -87,7 +87,8 @@ _intruder_lock = threading.Lock()
 _intruder_job: dict[str, Any] | None = None  # {request_id, running, progress, results, error, started}
 
 
-def _run_intruder_job(req_id: int, base: dict, wordlist: list[str]) -> None:
+def _run_intruder_job(req_id: int, base: dict,
+                      wordlist: list[str]) -> None:
     global _intruder_job
     try:
         results = intruder.run_attack(base, wordlist, req_id)
@@ -106,6 +107,34 @@ def _run_intruder_job(req_id: int, base: dict, wordlist: list[str]) -> None:
                 "request_id": req_id, "running": False,
                 "progress": 0, "total": len(wordlist),
                 "results": [], "error": str(exc),
+            }
+
+
+def _run_pitchfork_job(req_id: int, base: dict,
+                       lists: dict[str, list[str]]) -> None:
+    """Background runner for a multi-position attack."""
+    global _intruder_job
+    total = 1
+    for words in lists.values():
+        total *= max(len(words), 1)
+    try:
+        results = intruder.run_pitchfork(base, lists, req_id)
+        try:
+            db.store_intruder_results(results)
+        except Exception:
+            pass
+        with _intruder_lock:
+            _intruder_job = {
+                "request_id": req_id, "running": False, "progress": total,
+                "total": total, "results": results, "error": None,
+                "mode": "pitchfork",
+            }
+    except Exception as exc:
+        with _intruder_lock:
+            _intruder_job = {
+                "request_id": req_id, "running": False, "progress": 0,
+                "total": total, "results": [], "error": str(exc),
+                "mode": "pitchfork",
             }
 
 
@@ -399,6 +428,9 @@ def _log_filters(**overrides: Any) -> dict[str, Any]:
         "exclude_host": args.get("exclude_host", "").strip(),
         "hide_static": _truthy(args.get("hide_static")),
         "highlighted_only": _truthy(args.get("highlighted_only")),
+        "body_substr": args.get("body", "").strip(),
+        "exclude_body": args.get("exclude_body", "").strip(),
+        "min_length": max(args.get("min_length", 0, type=int), 0),
     }
     filters.update(overrides)
     return filters
@@ -547,6 +579,190 @@ def noise_clean():
 
 # ── Meta API ───────────────────────────────────────────────────────────
 
+# ── Diff API ──────────────────────────────────────────────────────────
+
+@app.route("/api/diff/<int:a_id>/<int:b_id>")
+def diff_captures(a_id: int, b_id: int):
+    """Compare two captures the way Burp's Compare Responses does.
+
+    The access-control workflow: send the same request twice with one
+    parameter changed, then ask "what actually changed?". Picks the best
+    available mode automatically (JSON → token → character) so HTML pages do
+    not degrade into one unreadable changed-bytes blob.
+
+    ``?mode=json|token|char`` forces a specific view.
+    """
+    from miniproxy.diff import diff_captures as _diff
+
+    a, b = db.get_request(a_id), db.get_request(b_id)
+    if a is None or b is None:
+        missing = a_id if a is None else b_id
+        return jsonify({"error": f"capture {missing} not found"}), 404
+    if a_id == b_id:
+        # Comparing a capture with itself is almost certainly a mis-click;
+        # say so rather than returning a confident "identical".
+        return jsonify({"error": "pick two different captures to compare"}), 400
+    try:
+        result = _diff(a, b, mode=flask_request.args.get("mode", "auto"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    # Bodies are returned separately below only when requested, so the
+    # default payload stays small enough to render instantly.
+    if not _truthy(flask_request.args.get("include_bodies")):
+        result = {k: v for k, v in result.items() if k != "body"}
+        result["body_withheld"] = True
+    return jsonify(result)
+
+
+@app.route("/api/diff/<int:a_id>/<int:b_id>/bodies")
+def diff_bodies(a_id: int, b_id: int):
+    """The two raw bodies for the diff view (fetched on demand)."""
+    a, b = db.get_request(a_id), db.get_request(b_id)
+    if a is None or b is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({
+        "a": {"body": a.get("body") or "", "response_body": a.get("response_body") or ""},
+        "b": {"body": b.get("body") or "", "response_body": b.get("response_body") or ""},
+    })
+
+
+# ── Repeater tabs / history API ───────────────────────────────────────
+
+@app.route("/api/repeater/tabs", methods=["GET", "POST"])
+def repeater_tabs():
+    """List or create persistent repeater tabs.
+
+    Tabs survive a page refresh (unlike the previous single shared editor,
+    where every send overwrote your work) and each tab keeps its own send
+    history, which is what makes A/B comparison practical.
+    """
+    if flask_request.method == "POST":
+        data = flask_request.get_json(silent=True) or {}
+        try:
+            row = db.create_repeater_tab(
+                title=str(data.get("title") or "")[:120],
+                method=str(data.get("method") or "GET").upper(),
+                url=str(data.get("url") or ""),
+                headers=data.get("headers") or {},
+                body=str(data.get("body") or ""),
+                source_id=data.get("source_id"),
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"tab": row}), 201
+    return jsonify({"tabs": db.get_repeater_tabs()})
+
+
+@app.route("/api/repeater/tabs/<int:tab_id>", methods=["GET", "PATCH", "DELETE"])
+def repeater_tab(tab_id: int):
+    """Read, update or delete one repeater tab."""
+    if flask_request.method == "DELETE":
+        if not db.delete_repeater_tab(tab_id):
+            return jsonify({"error": "no such tab"}), 404
+        return jsonify({"ok": True})
+    if flask_request.method == "PATCH":
+        data = flask_request.get_json(silent=True) or {}
+        try:
+            ok = db.update_repeater_tab(tab_id, **{
+                k: v for k, v in data.items()
+                if k in ("title", "method", "url", "headers", "body", "source_id")
+            })
+        except (ValueError, TypeError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        if not ok:
+            return jsonify({"error": "no such tab"}), 404
+    row = db.get_repeater_tab(tab_id)
+    if row is None:
+        return jsonify({"error": "no such tab"}), 404
+    return jsonify({"tab": row})
+
+
+@app.route("/api/repeater/tabs/<int:tab_id>/history", methods=["GET", "POST"])
+def repeater_tab_history(tab_id: int):
+    """Per-tab send history — the A/B record of what you sent and got back."""
+    if flask_request.method == "POST":
+        data = flask_request.get_json(silent=True) or {}
+        rid = db.add_repeater_history(
+            tab_id,
+            method=str(data.get("method") or "GET").upper(),
+            url=str(data.get("url") or ""),
+            headers=data.get("headers") or {},
+            body=str(data.get("body") or ""),
+            status_code=data.get("status_code"),
+            response_headers=data.get("response_headers") or {},
+            response_body=str(data.get("response_body") or ""),
+            error=str(data.get("error") or "") or None,
+        )
+        if rid is None:
+            return jsonify({"error": "no such tab"}), 404
+        return jsonify({"id": rid}), 201
+    return jsonify({"history": db.get_repeater_history(tab_id)})
+
+
+# ── Match & replace API ───────────────────────────────────────────────
+
+@app.route("/api/rewrite", methods=["GET", "POST"])
+def rewrite_rules():
+    """List or add match-and-replace rules applied to traffic in flight.
+
+    Burp's Proxy ▸ Proxy history rules: rewrite a header or parameter as the
+    request passes through, so a header you need on 40 requests does not mean
+    40 manual repeater round-trips.
+    """
+    if flask_request.method == "POST":
+        data = flask_request.get_json(silent=True) or {}
+        try:
+            rule_id = db.add_rewrite_rule(
+                target=str(data.get("target") or ""),
+                kind=str(data.get("kind") or "header"),
+                match=str(data.get("match") or ""),
+                replace=str(data.get("replace") or ""),
+                regex=bool(data.get("regex", False)),
+                enabled=bool(data.get("enabled", True)),
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"id": rule_id, "rules": db.get_rewrite_rules()}), 201
+    return jsonify({"rules": db.get_rewrite_rules()})
+
+
+@app.route("/api/rewrite/<int:rule_id>", methods=["PATCH", "DELETE"])
+def rewrite_rule(rule_id: int):
+    """Enable/disable or delete a single rewrite rule."""
+    if flask_request.method == "DELETE":
+        if not db.delete_rewrite_rule(rule_id):
+            return jsonify({"error": "no such rule"}), 404
+        return jsonify({"ok": True, "rules": db.get_rewrite_rules()})
+    data = flask_request.get_json(silent=True) or {}
+    ok = db.set_rewrite_rule_enabled(rule_id, bool(data.get("enabled", True)))
+    if not ok:
+        return jsonify({"error": "no such rule"}), 404
+    return jsonify({"ok": True, "rules": db.get_rewrite_rules()})
+
+
+# ── Wordlists API ─────────────────────────────────────────────────────
+
+@app.route("/api/wordlists")
+def wordlists():
+    """Bundled wordlists the Intruder can load without an upload.
+
+    Shipped in the package so a fresh install can attack immediately — no
+    hunting for a .txt file first.
+    """
+    from miniproxy import wordlists as wl
+
+    names = flask_request.args.get("name", "").strip()
+    if names:
+        entries = []
+        for name in names.split(","):
+            entry = wl.get_wordlist(name.strip())
+            if entry is None:
+                return jsonify({"error": f"no such wordlist: {name.strip()}"}), 404
+            entries.append(entry)
+        return jsonify({"wordlists": entries})
+    return jsonify({"wordlists": wl.list_wordlists()})
+
+
 @app.route("/api/meta")
 def meta():
     """Header-bar info: db path, proxy state, dashboard + proxy URLs."""
@@ -579,10 +795,16 @@ def repeater_send():
         except json.JSONDecodeError:
             raw_headers = {}
     body = data.get("body", "")
+    # Off by default (a lab that redirects is usually redirecting to a login
+    # page — silently following hides the 302 you are trying to test).
+    follow = bool(data.get("follow_redirects", False))
 
     if not url:
         return jsonify({"error": "URL is required"}), 400
 
+    # requests' own redirect following is used when asked, so the final
+    # response and the redirect chain are both reported.
+    chain: list[dict[str, Any]] = []
     try:
         resp = requests.request(
             method=method,
@@ -591,12 +813,22 @@ def repeater_send():
             data=body,
             timeout=15,
             verify=False,
-            allow_redirects=False,
+            allow_redirects=follow,
         )
+        if follow:
+            for hop in resp.history:
+                chain.append({
+                    "status": hop.status_code,
+                    "url": hop.url,
+                    "location": hop.headers.get("Location", ""),
+                })
         return jsonify({
             "status_code": resp.status_code,
             "headers": dict(resp.headers),
             "body": resp.text[:MAX_REPEATER_BODY],
+            "final_url": resp.url,
+            "followed": follow,
+            "redirects": chain,
         })
     except requests.RequestException as e:
         return jsonify({"error": str(e)}), 500
@@ -606,18 +838,50 @@ def repeater_send():
 
 @app.route("/api/intruder/start", methods=["POST"])
 def intruder_start():
+    """Start an attack, either single-list or pitchfork.
+
+    Single-list: ``{"request_id": 5, "wordlist": ["a", "b"]}`` — one word into
+    every ``§placeholder§``.
+
+    Pitchfork: ``{"request_id": 5, "mode": "pitchfork",
+    "lists": {"user": [...], "pass": [...]}}`` — a different wordlist per
+    position, which is what makes username×password attacks possible at all.
+
+    Either way the attack runs in a daemon thread; poll
+    ``/api/intruder/status`` for progress.
+    """
     data = flask_request.get_json(silent=True) or {}
     req_id = data.get("request_id")
-    wordlist = data.get("wordlist", [])
-
     if not req_id:
         return jsonify({"error": "request_id is required"}), 400
-    if not wordlist or not isinstance(wordlist, list):
-        return jsonify({"error": "wordlist must be a non-empty array"}), 400
+
+    mode = str(data.get("mode") or "single").lower()
+    if mode == "pitchfork":
+        lists = data.get("lists") or {}
+        if not isinstance(lists, dict):
+            return jsonify({"error": "lists must be an object of name → array"}), 400
+        cleaned = {
+            str(k): [str(w) for w in v]
+            for k, v in lists.items() if isinstance(v, list) and v
+        }
+        if not cleaned:
+            return jsonify({"error": "pitchfork needs at least one non-empty list"}), 400
+    else:
+        wordlist = data.get("wordlist", [])
+        if not wordlist or not isinstance(wordlist, list):
+            return jsonify({"error": "wordlist must be a non-empty array"}), 400
+        if len(wordlist) > Intruder.MAX_WORDS:
+            return jsonify({
+                "error": f"wordlist too large (max {Intruder.MAX_WORDS})",
+            }), 400
+        cleaned = wordlist  # type: ignore[assignment]
 
     base = db.get_request(int(req_id))
     if base is None:
         return jsonify({"error": "base request not found"}), 404
+
+    total = (len(wordlist) if mode != "pitchfork"
+             else _combo_total(cleaned))  # type: ignore[arg-type]
 
     global _intruder_job
     with _intruder_lock:
@@ -626,15 +890,35 @@ def intruder_start():
                 "error": "an attack is already running",
                 "job": {k: _intruder_job[k] for k in ("request_id", "progress", "total")},
             }), 409
+        if mode == "pitchfork" and total > Intruder.MAX_COMBOS:
+            return jsonify({
+                "error": f"pitchfork would send {total} requests "
+                         f"(max {Intruder.MAX_COMBOS}) — shrink a list",
+            }), 400
         _intruder_job = {
             "request_id": int(req_id), "running": True,
-            "progress": 0, "total": len(wordlist), "results": [], "error": None,
+            "progress": 0, "total": total, "results": [], "error": None,
+            "mode": mode,
         }
-    threading.Thread(
-        target=_run_intruder_job, args=(int(req_id), base, list(wordlist)),
-        daemon=True, name="miniproxy-intruder",
-    ).start()
-    return jsonify({"started": True, "total": len(wordlist)}), 202
+    if mode == "pitchfork":
+        threading.Thread(
+            target=_run_pitchfork_job,
+            args=(int(req_id), base, cleaned),  # type: ignore[arg-type]
+            daemon=True, name="miniproxy-pitchfork",
+        ).start()
+    else:
+        threading.Thread(
+            target=_run_intruder_job, args=(int(req_id), base, list(cleaned)),
+            daemon=True, name="miniproxy-intruder",
+        ).start()
+    return jsonify({"started": True, "total": total, "mode": mode}), 202
+
+
+def _combo_total(lists: dict[str, list[str]]) -> int:
+    total = 1
+    for words in lists.values():
+        total *= max(len(words), 1)
+    return total
 
 
 @app.route("/api/intruder/status")
@@ -651,6 +935,9 @@ def intruder_status():
         "total": job.get("total", 0),
         "error": job.get("error"),
         "has_result": bool(job.get("results")),
+        # Always present so a client can render "pitchfork" without having to
+        # distinguish "absent" from "single".
+        "mode": job.get("mode", "single"),
     }
     if not job.get("running"):
         payload["results"] = job.get("results", [])
@@ -677,7 +964,10 @@ def export_har():
                            url_substr=f["url"], ids=f["ids"],
                            host=f["host"], exclude_host=f["exclude_host"],
                            hide_static=f["hide_static"],
-                           highlighted_only=f["highlighted_only"])
+                           highlighted_only=f["highlighted_only"],
+                           body_substr=f["body_substr"],
+                           exclude_body=f["exclude_body"],
+                           min_length=f["min_length"])
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:  # corrupted DB / IO error
@@ -711,7 +1001,10 @@ def export_json():
                            url_substr=f["url"], ids=f["ids"],
                            host=f["host"], exclude_host=f["exclude_host"],
                            hide_static=f["hide_static"],
-                           highlighted_only=f["highlighted_only"])
+                           highlighted_only=f["highlighted_only"],
+                           body_substr=f["body_substr"],
+                           exclude_body=f["exclude_body"],
+                           min_length=f["min_length"])
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -941,6 +1234,9 @@ def _export_filters() -> dict:
         "exclude_host": args.get("exclude_host", "").strip(),
         "hide_static": _truthy(args.get("hide_static")),
         "highlighted_only": _truthy(args.get("highlighted_only")),
+        "body_substr": args.get("body", "").strip(),
+        "exclude_body": args.get("exclude_body", "").strip(),
+        "min_length": max(args.get("min_length", 0, type=int), 0),
     }
 
 

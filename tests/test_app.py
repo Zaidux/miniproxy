@@ -320,16 +320,59 @@ class TestBackgroundIntruder:
                            json={"request_id": 999, "wordlist": ["a"]}).status_code == 404
 
     def test_wordlist_too_large_rejected(self, app_client, seeded_db):
+        """Oversized wordlists are refused synchronously.
+
+        This used to be accepted with a 202 and then fail inside the worker,
+        which meant the UI showed "attack started" before reporting an error.
+        The size is known at request time, so the refusal happens up front.
+        """
         client, _, _ = app_client
         r = client.post("/api/intruder/start",
                         json={"request_id": 1, "wordlist": ["w"] * 1001})
-        assert r.status_code == 202  # accepted, fails in the worker
-        for _ in range(100):
+        assert r.status_code == 400
+        assert "too large" in r.get_json()["error"]
+        # No job was left behind in a running state.
+        assert client.get("/api/intruder/status").get_json()["running"] is False
+
+    def test_pitchfork_crosses_lists(self, app_client, seeded_db):
+        """Different wordlists per placeholder — the pitchfork attack."""
+        client, _, _ = app_client
+        r = client.post("/api/intruder/start", json={
+            "request_id": 1, "mode": "pitchfork",
+            "lists": {"user": ["a", "b"], "pass": ["1", "2", "3"]},
+        })
+        assert r.status_code == 202
+        assert r.get_json()["total"] == 6
+        for _ in range(200):
             st = client.get("/api/intruder/status").get_json()
             if not st["running"]:
                 break
             time.sleep(0.05)
-        assert "too large" in (st["error"] or "")
+        assert st["mode"] == "pitchfork"
+        assert len(st["results"]) == 6
+        # Each result names both substituted values, and all six combinations
+        # are distinct — that is the whole point of pitchfork over "one word
+        # into every position".
+        labels = [x["payload"] for x in st["results"]]
+        assert len(set(labels)) == 6
+        assert all("user=" in l and "pass=" in l for l in labels)
+
+    def test_pitchfork_rejects_bad_input(self, app_client, seeded_db):
+        client, _, _ = app_client
+        assert client.post("/api/intruder/start", json={
+            "request_id": 1, "mode": "pitchfork", "lists": {},
+        }).status_code == 400
+        assert client.post("/api/intruder/start", json={
+            "request_id": 1, "mode": "pitchfork", "lists": {"u": []},
+        }).status_code == 400
+        assert client.post("/api/intruder/start", json={
+            "request_id": 1, "mode": "pitchfork", "lists": "nope",
+        }).status_code == 400
+        # 40000 combinations exceeds the cap.
+        assert client.post("/api/intruder/start", json={
+            "request_id": 1, "mode": "pitchfork",
+            "lists": {"a": ["x"] * 200, "b": ["y"] * 200},
+        }).status_code == 400
 
 
 class TestRepeater:
