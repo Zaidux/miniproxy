@@ -237,9 +237,178 @@ def build_parser() -> argparse.ArgumentParser:
     p_log.add_argument("--id", type=int, default=None)
     p_log.add_argument("--limit", type=int, default=30)
 
+    p_noise = sub.add_parser(
+        "noise",
+        help="Manage browser-noise rules and clean captured noise",
+        description="Browser telemetry drowns out the target. These rules make "
+                    "matched traffic skip the capture DB entirely; `clean` "
+                    "removes noise already captured.",
+    )
+    noise_sub = p_noise.add_subparsers(dest="noise_action")
+
+    p_nl = noise_sub.add_parser("list", help="Show noise rules and their state")
+    p_nl.add_argument("--db", default=None, help="capture DB path")
+
+    p_na = noise_sub.add_parser("add", help="Ignore a host from now on")
+    p_na.add_argument("hosts", nargs="+", help="host or *.suffix pattern")
+    p_na.add_argument("--db", default=None, help="capture DB path")
+
+    p_nr = noise_sub.add_parser("rm", help="Stop ignoring a host")
+    p_nr.add_argument("hosts", nargs="+")
+    p_nr.add_argument("--db", default=None)
+
+    p_ne = noise_sub.add_parser("enable", help="Enable rules (all, or the listed ones)")
+    p_ne.add_argument("hosts", nargs="*", help="hosts to enable; omit for all")
+    p_ne.add_argument("--db", default=None)
+
+    p_nd = noise_sub.add_parser("disable", help="Disable rules")
+    p_nd.add_argument("hosts", nargs="*")
+    p_nd.add_argument("--db", default=None)
+
+    p_ns = noise_sub.add_parser("scan", help="Dry run: what would be removed")
+    p_ns.add_argument("--db", default=None)
+
+    p_nc = noise_sub.add_parser("clean", help="Delete captured noise (backs up first)")
+    p_nc.add_argument("--yes", "-y", action="store_true", help="confirm the deletion")
+    p_nc.add_argument("--keep-host", action="append", default=None,
+                      help="never delete captures from this host (repeatable)")
+    p_nc.add_argument("--db", default=None)
+
     sub.add_parser("version", help="Print the MiniProxy version")
 
     return parser
+
+
+def _open_db(db_path=None):
+    """Open the capture DB the same way `log` does (proxy.db under STATE_DIR).
+
+    Precedence matches the rest of the CLI: explicit --db, then
+    MINIPROXY_DB_PATH, then the default session DB.
+    """
+    from miniproxy.addon.db import Database
+    from miniproxy.server import STATE_DIR
+
+    return Database(db_path or os.environ.get("MINIPROXY_DB_PATH")
+                    or (STATE_DIR / "proxy.db"))
+
+
+def _cmd_noise(args) -> int:
+    """`miniproxy noise …` — manage telemetry/ad rules and clean old captures.
+
+    Split out of main() because it is the only subcommand with its own
+    verbs; the point of it is that noise can be handled without the dashboard
+    running (over SSH, on a headless box).
+    """
+    action = args.noise_action
+
+    if action == "list":
+        db = _open_db(getattr(args, "db", None))
+        rules = db.list_noise_rules()
+        if not rules:
+            print("(no noise rules)")
+            return 0
+        print(f"{'ON':<4} {'KIND':<7} VALUE")
+        print("-" * 60)
+        for r in rules:
+            mark = "yes" if r["enabled"] else "no "
+            tag = " (bundled)" if r["builtin"] else ""
+            print(f"{mark:<4} {r['kind']:<7} {r['value']}{tag}")
+        enabled = sum(1 for r in rules if r["enabled"])
+        print(f"\n{enabled}/{len(rules)} enabled · matched traffic is never captured.")
+        return 0
+
+    if action in ("add", "rm", "enable", "disable"):
+        db = _open_db(getattr(args, "db", None))
+        values = getattr(args, "hosts", None) or []
+
+        def _norm(host: str) -> str:
+            # A rule may be written with or without the wildcard prefix;
+            # store and match it the same way.
+            return str(host).strip().lower().lstrip("*").lstrip(".")
+
+        try:
+            if action in ("add", "rm"):
+                # Both address a specific host, so they require one.
+                if not values:
+                    print(f"error: `noise {action}` needs at least one host",
+                          file=sys.stderr)
+                    return 2
+                for host in values:
+                    if action == "add":
+                        db.add_noise_rule(host, kind="host", enabled=True)
+                        print(f"added rule: {host}")
+                    else:
+                        # Compare normalized on both sides: a rule stored as
+                        # "*.youtube.com" must be removable by "youtube.com".
+                        want_norm = _norm(host)
+                        targets = [r for r in db.list_noise_rules()
+                                   if _norm(r["value"]) == want_norm]
+                        if not targets:
+                            print(f"no rule for {host}", file=sys.stderr)
+                            return 1
+                        for t in targets:
+                            db.delete_noise_rule(t["id"])
+                        print(f"removed rule: {host}")
+                return 0
+
+            # enable/disable: no hosts means "all of them" — the one-click
+            # opt-in for the bundled telemetry list.
+            want = action == "enable"
+            if values:
+                targets = [r for r in db.list_noise_rules()
+                           if _norm(r["value"]) in {_norm(v) for v in values}]
+                if not targets:
+                    print("no matching rules", file=sys.stderr)
+                    return 1
+            else:
+                targets = db.list_noise_rules()
+            changed = 0
+            for r in targets:
+                if bool(r["enabled"]) != want:
+                    db.set_noise_rule_enabled(r["id"], want)
+                    changed += 1
+            scope = f"{len(targets)} rule(s)" if values else "all rules"
+            print(f"{scope}: {changed} {action}d")
+            if not values and want:
+                print("Matched hosts will no longer be captured.")
+            return 0
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+    if action == "scan":
+        db = _open_db(getattr(args, "db", None))
+        scan = db.scan_noise()
+        print(f"{scan['matched']} capture(s) would be removed, {scan['keep']} kept.")
+        if scan["by_host"]:
+            print(f"\n{'HOST':<50} ROWS")
+            print("-" * 58)
+            for row in scan["by_host"]:
+                print(f"{row['host'][:50]:<50} {row['removed']:>4}")
+        print("\nNothing was deleted. Re-run with `noise clean` to apply.")
+        return 0
+
+    if action == "clean":
+        db = _open_db(getattr(args, "db", None))
+        scan = db.scan_noise()
+        if not scan["matched"]:
+            print("nothing to clean.")
+            return 0
+        if not args.yes:
+            # Refuse without confirmation — this deletes captured traffic.
+            print(f"This would delete {scan['matched']} capture(s) "
+                  f"({scan['keep']} kept).")
+            for row in scan["by_host"][:10]:
+                print(f"  {row['host']}: {row['removed']}")
+            print("\nRe-run with --yes to apply (a .noise-backup-*.db is written).")
+            return 1
+        result = db.clean_noise(keep_hosts=args.keep_host or [])
+        print(f"removed {result['removed']} capture(s).")
+        if result["backup"]:
+            print(f"backup: {result['backup']}")
+        return 0
+
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -471,6 +640,9 @@ def main(argv: list[str] | None = None) -> int:
         if not logs:
             print("(no captured requests yet)")
         return 0
+
+    if args.command == "noise":
+        return _cmd_noise(args)
 
     parser.print_help()
     return 1

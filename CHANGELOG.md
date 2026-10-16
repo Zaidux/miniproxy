@@ -12,6 +12,110 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-10-16
+
+The dashboard becomes something you can actually scan on a phone, and
+browser noise stops drowning out the target.
+
+### Added
+
+**Dashboard — closer to Burp, still simpler**
+
+- **Host and Path columns.** The URL is split in the request table so you can
+  scan endpoints instead of scrolling past the same host 200 times. The host
+  column is dimmed with a leading `www.`/`m.` stripped, the query string is
+  shown after a dimmed `?`, and the full URL stays in the row tooltip. The Log
+  tab and the request picker use the same split.
+- **Size column.** Response size per row (recorded length, falling back to the
+  stored body), formatted `B`/`K`/`M`.
+- **Resizable, collapsible split.** The divider between the request table and
+  the detail pane drags to resize (pointer events, so mouse/touch/pen all
+  work) and collapses the detail pane to a full-width table on click. Arrow
+  keys resize and Enter/Space toggle when the handle is focused. Width and
+  collapsed state persist across refreshes. On narrow screens the panes stack
+  and the divider becomes a horizontal affordance.
+- **Custom row highlights.** A Burp-style 8-colour palette (red, orange,
+  yellow, green, cyan, blue, magenta, pink) plus Clear. A highlighted row gets
+  a coloured left bar and a faint tint. Stored on the row, so highlights
+  survive refreshes, a different browser, and a proxy restart. Filter to your
+  marked rows with the new **Highlighted** chip.
+- **Per-row ⋮ menu.** Every row has a touch-sized overflow button — pinned to
+  the right edge of the scroll area so it never scrolls out of reach on a
+  phone — opening the palette plus Add note / Repeater / To Intruder. There is
+  no right-click-only path, because right-click does not exist on Android.
+- **Notes.** Free-text notes attached to a capture, edited in a new **Note**
+  detail tab. Saving a note never clears the highlight, and vice versa.
+- **Pretty / Raw / Hex body views**, on both the request and the response side.
+  *Pretty* re-indents JSON; *Raw* escapes control and non-ASCII characters so
+  you can see what a decoder or filter did to the bytes; *Hex* is a real dump
+  with an offset column, byte columns and ASCII gutter, with all-zero rows
+  dimmed. Each side keeps the view you last chose. Binary bodies get a hint
+  pointing at Hex.
+- **Host focus dropdown**, labelled with each host's capture count, plus a
+  summary showing `N shown / M fetched` and naming the noisiest hosts.
+- **Hide static chip** — drops images/fonts/css/js/media with one tap.
+- **Noise modal** — manage rules, dry-run a scan, and delete captured noise,
+  with the same confirmation and backup guarantees as the CLI.
+
+**Noise — three layers**
+
+- **Capture time.** Enabled host rules make matching traffic skip the row
+  entirely; it is still proxied, it just never reaches the DB. Rules match on
+  host (suffix-aware, `*.example.com` supported) and never on a path segment.
+  A bundled list of known telemetry/ad hosts ships **disabled**, so nothing is
+  dropped until you opt in.
+- **Query time.** `host`, `exclude_host`, `hide_static` and `highlighted_only`
+  filters, applied in SQL across the listing, the count and every export. A
+  static asset is decided by content type first — a known asset MIME wins, a
+  known non-asset MIME wins over a misleading `/api/image.png` filename — and
+  only falls back to the URL extension when no type was recorded.
+- **Cleanup time.** `scan_noise()` (dry run, never deletes) and
+  `clean_noise()`, which writes a timestamped `.noise-backup-<date>.db`
+  snapshot via SQLite's backup API first, cascades to `intruder_results`, and
+  can protect hosts you name.
+- **`miniproxy noise` CLI** — `list` / `enable` / `disable` / `add` / `rm` /
+  `scan` / `clean`. `clean` refuses without `--yes` and takes repeatable
+  `--keep-host`. Works with no dashboard and no proxy running.
+
+**API**
+
+- `PATCH /api/logs/<id>` — set `highlight` and/or `note` (absent keys
+  untouched).
+- `GET /api/hosts` — hosts with capture counts, busiest first.
+- `GET|POST /api/noise/rules`, `PATCH|DELETE /api/noise/rules/<id>`,
+  `GET /api/noise/scan`, `POST /api/noise/clean` (requires `confirm`).
+
+### Changed
+
+- The **Repeater tab now uses the same capture picker modal as the Intruder**,
+  instead of a bare `<select>` that ignored the Live tab filters. Both pick
+  from the same seeded filters and the modal header shows which editor "Use
+  it" will fill, so you can no longer replay or fuzz a request the Live tab is
+  hiding. The picker gained its own host filter and shows host/path columns.
+- Exports (HAR + JSON) honour the new host / hide-static / highlighted filters,
+  so an export matches what the table shows.
+- Highlights and notes persist across restarts; the rest of the UI session
+  (`localStorage`) additionally now keeps the host filter, the Hide-static and
+  Highlighted chips, and the pane width/collapsed state.
+
+### Fixed
+
+- A drag of the splitter handle also fired a click on it, so **every resize
+  collapsed the detail pane**. The toggle is now suppressed for a real drag.
+- `count_logs()` counted by materialising every matching row into Python
+  (`get_logs(limit=10_000_000)`) and taking `len()`. It now runs a real
+  `COUNT(*)`, so counting a large capture DB no longer loads hundreds of
+  megabytes.
+- Listing, counting and exporting now build their `WHERE` clause through one
+  shared compiler, so they cannot drift apart.
+
+### Security
+
+- Highlight colors are validated against a fixed palette server-side. The
+  value is interpolated into a `style` attribute, so an unvalidated string
+  would have been a stored-XSS hole; off-palette values are rejected with a
+  400 and never persisted.
+
 ## [0.6.1] — 2026-10-15
 
 ### Fixed
@@ -198,7 +302,8 @@ See the git history (<https://github.com/Zaidux/miniproxy/commits/main>) —
 the pre-0.4 releases were the Riciplay-bundled variant without a standalone
 changelog.
 
-[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.2
 [0.6.1]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.1
 [0.6.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.5.0

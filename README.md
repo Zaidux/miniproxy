@@ -74,6 +74,26 @@ miniproxy stop
 
 State (pid, port, default capture DB) lives under `~/.miniproxy/`.
 
+### Quieting browser noise
+
+```bash
+miniproxy noise list                  # rules and their state
+miniproxy noise enable                # opt into the bundled telemetry/ad list
+miniproxy noise add '*.telemetry.example.com'
+miniproxy noise disable youtube.com   # just this one
+miniproxy noise rm youtube.com
+
+miniproxy noise scan                  # dry run: what would go, by host
+miniproxy noise clean                 # refuses without --yes
+miniproxy noise clean --yes --keep-host target.example
+```
+
+Enabled rules make matching hosts skip the capture **entirely** — the traffic
+is still proxied, it just never reaches the DB. `clean` writes a timestamped
+`.noise-backup-<date>.db` snapshot first (via SQLite's backup API) and reports
+its path, so a misjudged rule is always recoverable. Works with no dashboard
+and no proxy running. Full model: [docs/web-ui.md](docs/web-ui.md#noise--the-browser-noise-problem).
+
 ## The TUI
 
 `miniproxy tui` opens a two-pane terminal dashboard over the same SQLite capture DB the dashboard uses (it does not need the dashboard — or even the proxy — running):
@@ -122,8 +142,44 @@ Tools that ignore proxy env vars can usually be pointed explicitly (`curl -x`, `
 - **Intruder** — `§param§` placeholders + wordlist fuzzing, results by status code
 - **Connect** — PAC URL, CA download, QR code, and step-by-step settings for connecting any browser/device (including remotely)
 
+### Built for scanning, and for a phone
+
+- **Host + Path columns** — the URL is split so you read endpoints, not the same host 200 times.
+- **Resizable / collapsible panes** — drag the divider, click it to hide the detail pane. Remembered across refreshes.
+- **Highlight + notes** — an 8-colour Burp-style palette per row (tap the **⋮** button — a real touch target, no right-click needed) and free-text notes. Stored with the capture, so they survive restarts.
+- **Pretty / Raw / Hex** — every body, both request and response. JSON re-indented, bytes escaped, or a full hex dump with offsets and an ASCII gutter.
+- **Host focus + Hide static** — one tap to narrow to your target, or drop images/fonts/css/js.
+- **Noise control** — see below.
+
 Captures persist across refreshes and restarts until you click
 **Clear all captures…**.
+
+## Browser noise (the thing that ruins a capture)
+
+A browser session drags in telemetry pings, ad beacons, new-tab thumbnails
+and fonts. On a real Web Security Academy run: **119 captured rows, 12 on
+target**. MiniProxy fights this in three layers, so you can go back to
+reading the requests.
+
+1. **Capture time** — enable noise rules and matching hosts never reach the DB
+   at all (traffic is still proxied). A bundled list of known telemetry/ad
+   hosts ships *disabled*, so nothing is dropped until you opt in.
+2. **Query time** — the Host dropdown, the **Hide static** chip, and the
+   **Highlighted** chip narrow what's already captured, with a summary showing
+   `N shown / M fetched` and naming the noisiest hosts.
+3. **Cleanup time** — `noise scan` previews exactly what would be deleted
+   (broken down by host) and `noise clean` applies it. Both the CLI and the
+   dashboard's **Noise…** button **refuse to delete without confirmation**,
+   write a timestamped `.noise-backup-<date>.db` first, and can protect hosts
+   you name.
+
+```bash
+miniproxy noise list       # rules and their state
+miniproxy noise enable     # opt into the bundled telemetry/ad list
+miniproxy noise add '*.telemetry.example.com'
+miniproxy noise scan       # dry run — never deletes
+miniproxy noise clean      # refuses without --yes
+```
 
 ## Connecting a browser (yours, a phone, or anywhere)
 
@@ -165,8 +221,8 @@ src/miniproxy/
 ├── server.py           # start/stop/status process manager
 ├── tui.py              # Textual terminal UI (live feed, repeater, filters)
 └── __main__.py         # the `miniproxy` entry point (start/stop/status/
-                        #   dashboard/tui/send/log — log, send, and the TUI
-                        #   work without any dashboard running)
+                        #   dashboard/tui/send/log/noise — log, noise, send,
+                        #   and the TUI work without any dashboard running)
 ```
 
 ## Development
@@ -174,7 +230,9 @@ src/miniproxy/
 ```bash
 git clone https://github.com/Zaidux/miniproxy && cd miniproxy
 pip install -e ".[dev]"
-pytest                     # 100+ tests: db, devices, API, exports, intruder, process mgr, TUI, connect
+pytest                     # 300+ tests: db, devices, API, exports, intruder,
+                          # process mgr, TUI, connect, noise, JS/Python parity,
+                          # dashboard XSS
 ```
 
 CI runs the suite on Linux/macOS (Python 3.10/3.12) for every push and PR,

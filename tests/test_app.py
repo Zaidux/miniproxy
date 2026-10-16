@@ -19,6 +19,142 @@ def seeded_db(db):
     return rid
 
 
+class TestAnnotationAndNoiseEndpoints:
+    """Highlight/note PATCH, host rollup, and the noise rule/clean endpoints."""
+
+    def test_patch_highlight_and_note(self, app_client, seeded_db):
+        client, db, _ = app_client
+        r = client.patch(f"/api/logs/{seeded_db}",
+                         json={"highlight": "#3fb950", "note": "IDOR check"})
+        assert r.status_code == 200
+        assert r.get_json()["highlight"] == "#3fb950"
+        assert r.get_json()["note"] == "IDOR check"
+        # Only the supplied keys change.
+        assert db.get_request(seeded_db)["highlight"] == "#3fb950"
+
+    def test_patch_note_keeps_highlight(self, app_client, seeded_db):
+        client, db, _ = app_client
+        client.patch(f"/api/logs/{seeded_db}", json={"highlight": "#58a6ff"})
+        client.patch(f"/api/logs/{seeded_db}", json={"note": "keep color"})
+        assert db.get_request(seeded_db)["highlight"] == "#58a6ff"
+        assert db.get_request(seeded_db)["note"] == "keep color"
+
+    def test_patch_clear_highlight(self, app_client, seeded_db):
+        client, db, _ = app_client
+        client.patch(f"/api/logs/{seeded_db}", json={"highlight": "#f85149"})
+        client.patch(f"/api/logs/{seeded_db}", json={"highlight": ""})
+        assert db.get_request(seeded_db)["highlight"] is None
+
+    def test_patch_rejects_offpalette_color(self, app_client, seeded_db):
+        """Colors are interpolated into a style attribute, so this is the
+        stored-XSS guard."""
+        client, db, _ = app_client
+        r = client.patch(f"/api/logs/{seeded_db}",
+                         json={"highlight": "#3fb950;background:url(//evil)"})
+        assert r.status_code == 400
+        assert db.get_request(seeded_db)["highlight"] is None
+
+    def test_patch_404(self, app_client):
+        client, db, _ = app_client
+        assert client.patch("/api/logs/9999", json={"highlight": "#3fb950"}).status_code == 404
+
+    def test_host_filter_endpoints(self, app_client, seeded_db):
+        client, db, _ = app_client
+        assert client.get("/api/logs?host=api.test").get_json() == [
+            *[r for r in client.get("/api/logs").get_json()]
+        ]
+        assert client.get("/api/logs?host=nope").get_json() == []
+        assert client.get("/api/logs/count?host=api.test").get_json() == {"count": 2}
+        hosts = client.get("/api/hosts").get_json()["hosts"]
+        assert hosts[0]["host"] == "api.test"
+        assert hosts[0]["count"] == 2
+
+    def test_hide_static_filter_endpoints(self, app_client, seeded_db):
+        client, db, _ = app_client
+        rid = db.store_request("GET", "https://api.test/app.css", {}, "")
+        db.update_response(rid, 200, {}, "body{}", "text/css")
+        assert client.get("/api/logs/count").get_json() == {"count": 3}
+        assert client.get("/api/logs/count?hide_static=1").get_json() == {"count": 2}
+        assert client.get("/api/logs/count?hide_static=0").get_json() == {"count": 3}
+        # Only the css row disappears.
+        assert [r["id"] for r in client.get("/api/logs?hide_static=1").get_json()] == [2, 1]
+
+    def test_highlighted_only_filter_endpoint(self, app_client, seeded_db):
+        client, db, _ = app_client
+        assert client.get("/api/logs/count?highlighted_only=1").get_json() == {"count": 0}
+        client.patch(f"/api/logs/{seeded_db}", json={"highlight": "#39c5cf"})
+        assert client.get("/api/logs/count?highlighted_only=1").get_json() == {"count": 1}
+
+    def test_noise_rules_crud(self, app_client, seeded_db):
+        client, db, _ = app_client
+        assert client.get("/api/noise/rules").get_json()["palette"]
+        # Bundled rules ship disabled.
+        assert not any(r["enabled"] for r in client.get("/api/noise/rules").get_json()["rules"])
+
+        r = client.post("/api/noise/rules", json={"value": "ads.example.com"})
+        assert r.status_code == 201
+        rule = [x for x in r.get_json()["rules"] if x["value"] == "ads.example.com"][0]
+        assert rule["enabled"] == 1
+
+        # Now capture-time blocking works.
+        rid = db.store_request("GET", "https://ads.example.com/x", {}, "")
+        assert db.is_noise("https://ads.example.com/x")
+
+        client.patch(f"/api/noise/rules/{rule['id']}", json={"enabled": False})
+        assert not db.is_noise("https://ads.example.com/x")
+
+        assert client.delete(f"/api/noise/rules/{rule['id']}").status_code == 200
+        assert client.delete(f"/api/noise/rules/{rule['id']}").status_code == 404
+
+    def test_noise_rule_validation(self, app_client):
+        client, db, _ = app_client
+        assert client.post("/api/noise/rules", json={"value": ""}).status_code == 400
+        assert client.post("/api/noise/rules", json={"value": "a/b"}).status_code == 400
+
+    def test_enable_builtin_bundle(self, app_client, seeded_db):
+        client, db, _ = app_client
+        r = client.post("/api/noise/rules", json={"enable_builtin": True})
+        assert all(x["enabled"] for x in r.get_json()["rules"])
+        assert db.is_noise("https://incoming.telemetry.mozilla.org/v1/ping")
+
+    def test_noise_scan_does_not_delete(self, app_client, seeded_db):
+        client, db, _ = app_client
+        client.post("/api/noise/rules", json={"enable_builtin": True})
+        scan = client.get("/api/noise/scan").get_json()
+        assert "matched" in scan and "keep" in scan
+        assert db.count_logs() == 2  # nothing removed by a scan
+
+    def test_noise_clean_requires_confirmation(self, app_client, seeded_db):
+        client, db, _ = app_client
+        client.post("/api/noise/rules", json={"enable_builtin": True})
+        r = client.post("/api/noise/clean", json={})
+        assert r.status_code == 400
+        assert r.get_json()["error"] == "confirmation required"
+        assert db.count_logs() == 2
+
+    def test_noise_clean_with_confirmation(self, app_client, seeded_db):
+        client, db, _ = app_client
+        rid = db.store_request("GET", "https://incoming.telemetry.mozilla.org/v1/p", {}, "")
+        db.update_response(rid, 200, {}, "x", "text/plain")
+        client.post("/api/noise/rules", json={"enable_builtin": True})
+        r = client.post("/api/noise/clean", json={"confirm": True})
+        assert r.status_code == 200
+        assert r.get_json()["removed"] == 1
+        assert db.count_logs() == 2  # only the telemetry row went
+
+    def test_noise_clean_rejects_bad_keep_hosts(self, app_client):
+        client, db, _ = app_client
+        r = client.post("/api/noise/clean", json={"confirm": True, "keep_hosts": "nope"})
+        assert r.status_code == 400
+
+    def test_exports_honor_new_filters(self, app_client, seeded_db):
+        client, db, _ = app_client
+        client.patch(f"/api/logs/{seeded_db}", json={"highlight": "#e3b341"})
+        har = client.get("/api/export/har?highlighted_only=1").get_json()
+        assert len(har["log"]["entries"]) == 1
+        assert client.get("/api/export/json?host=api.test").get_json()
+
+
 class TestLogEndpoints:
     def test_logs_and_detail(self, app_client, seeded_db):
         client, db, _ = app_client

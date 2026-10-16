@@ -16,7 +16,7 @@ from miniproxy import __main__ as cli
 
 ALL_COMMANDS = [
     "start", "web", "stop", "status", "dashboard",
-    "connect", "tui", "send", "log", "version",
+    "connect", "tui", "send", "log", "noise", "version",
 ]
 
 
@@ -38,6 +38,17 @@ class TestParserConstruction:
         if argv == ["send"]:
             argv = ["send", "--url", "https://example.test"]
         cli.build_parser().parse_args(argv)
+
+    @pytest.mark.parametrize("verb", ["list", "add", "rm", "enable", "disable",
+                                      "scan", "clean"])
+    def test_noise_verbs_parse(self, verb):
+        """`noise` has its own verbs; each one must be reachable."""
+        argv = ["noise", verb]
+        if verb in ("add", "rm"):
+            argv.append("example.test")
+        parsed = cli.build_parser().parse_args(argv)
+        assert parsed.command == "noise"
+        assert parsed.noise_action == verb
 
     def test_start_options_copied_to_web(self):
         parsed = cli.build_parser().parse_args(

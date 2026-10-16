@@ -127,6 +127,14 @@ class MiniProxyAddon:
                 self._skipped = getattr(self, "_skipped", 0) + 1
             return
 
+        # Noise gate: known telemetry/ad hosts (user-enabled rules) never reach
+        # the DB. Runs *after* the scope guard and *before* store_request, so a
+        # dropped flow is genuinely never written — not written-then-deleted.
+        # Traffic is still proxied untouched; this only stops the capture.
+        if self.db.is_noise(req.pretty_url):
+            self._noise = getattr(self, "_noise", 0) + 1
+            return
+
         # Capture mode ALWAYS records requests. A previous version gated this
         # on a per-DB "intercept" config flag that defaults to absent/False on
         # every fresh session DB — which silently produced proxies that routed
@@ -215,18 +223,25 @@ class MiniProxyAddon:
             pass
 
     def done(self) -> None:
-        """Log scope-guard counters when the proxy shuts down."""
+        """Log scope-guard and noise counters when the proxy shuts down."""
+        from mitmproxy import ctx
+
         scope = getattr(self, "scope", None)
         skipped = getattr(self, "_skipped", 0)
         blocked = getattr(self, "_blocked", 0)
         if scope and (skipped or blocked):
-            from mitmproxy import ctx
-
             ctx.log.info(
                 "MiniProxy scope guard: %d out-of-scope request(s) skipped, "
                 "%d blocked.",
                 skipped,
                 blocked,
+            )
+        noise = getattr(self, "_noise", 0)
+        if noise:
+            ctx.log.info(
+                "MiniProxy noise filter: %d request(s) matched an enabled "
+                "noise rule and were not captured.",
+                noise,
             )
 
 

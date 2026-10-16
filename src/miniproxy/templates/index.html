@@ -45,9 +45,11 @@ textarea{min-height:80px;resize:vertical}
 #filters{display:flex;gap:8px;margin-bottom:10px;align-items:center}
 #filters select{width:130px;flex:none}
 #filters input{flex:1}
-.split{display:flex;gap:12px;align-items:stretch}
-.table-pane{flex:1 1 58%;min-width:0}
-.detail-pane{flex:1 1 42%;min-width:340px;max-width:44%}
+/* --split is the detail-pane width as a percentage, written by the
+   splitter's drag handler and restored on load. */
+.split{display:flex;gap:12px;align-items:stretch;--split:42%}
+.table-pane{flex:1 1 auto;min-width:0}
+.detail-pane{flex:0 0 var(--split);min-width:340px;max-width:75%}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:0;overflow:hidden;display:flex;flex-direction:column}
 .card-header{padding:8px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .card-body{padding:14px;overflow:auto}
@@ -111,7 +113,96 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
 .export-menu hr{border:none;border-top:1px solid var(--border);margin:4px 0}
 .btn-clear{color:var(--red);border-color:rgba(248,81,73,.45);margin-left:6px}
 .btn-clear:hover{background:rgba(248,81,73,.14);border-color:var(--red)}
-@media (max-width: 900px){.split{flex-direction:column}.detail-pane{max-width:none}}
+/* Host column: muted so the Path — the part you actually scan — leads the eye. */
+.host-cell{color:var(--muted);font-size:12px}
+@media (max-width: 900px){
+  .split{flex-direction:column}
+  .detail-pane{flex:1 1 auto;max-width:none;width:100%}
+  /* On a phone the splitter is a horizontal affordance instead, and it
+     collapses by default (initSplitter reads the same saved flag). */
+  .splitter{flex:0 0 6px;cursor:row-resize;width:100%}
+  .split.collapsed .splitter::before{width:26px;height:2px;margin:-1px 0 0 -13px}
+  .rowmenu-btn{min-width:40px;min-height:36px}
+}
+
+/* ── Splitter (resize / collapse the detail pane) ────────────────── */
+/* The detail pane width is a CSS custom property (--split) so dragging,
+   collapsing and mobile media queries all control one value. */
+.splitter{flex:0 0 6px;cursor:col-resize;background:transparent;border-radius:3px;position:relative;touch-action:none}
+.splitter::after{content:"";position:absolute;inset:0 2px;background:var(--border);border-radius:3px;transition:background .12s}
+.splitter:hover::after,.splitter.dragging::after{background:var(--accent)}
+.splitter.collapsed::after{background:var(--accent);opacity:.5}
+/* Keyboard/AT fallback: the handle is a real focusable control. */
+.splitter:focus-visible::after{background:var(--accent);box-shadow:0 0 0 2px rgba(88,166,255,.4)}
+.split.collapsed .detail-pane{display:none}
+.split.collapsed .table-pane{flex:1 1 100%;max-width:none}
+/* When the pane is collapsed the handle should read as "expand me". */
+.splitter::before{content:"";position:absolute;top:50%;left:50%;width:2px;height:26px;margin:-13px 0 0 -1px;background:var(--muted);opacity:.5;border-radius:2px;pointer-events:none}
+
+/* ── Highlight colors (Burp-style palette) ──────────────────────── */
+/* Row highlight is painted as a left bar + a faint tint so the URL stays
+   readable; the tint is layered behind the text, never replacing it. */
+tbody tr.hl-row{box-shadow:inset 4px 0 0 0 var(--hl)}
+tbody tr.hl-row td:first-child{background:var(--hl-tint)}
+tbody tr.hl-row:hover td{background:var(--hl-tint)}
+.hl-swatch{width:16px;height:16px;border-radius:4px;border:1px solid rgba(255,255,255,.25);cursor:pointer;flex:none}
+.hl-swatch.active{box-shadow:0 0 0 2px var(--accent)}
+.hl-clear{color:var(--muted)}
+
+/* ── Per-row overflow menu (⋮) ───────────────────────────────────── */
+/* Sized to ~40px so it is a comfortable tap target on a phone; the whole
+   point of the ⋮ is touch, since a right-click context menu is unusable
+   on Android. */
+/* The ⋮ column sticks to the right edge of the scroll area. On a phone the
+   6-column table is wider than the viewport, and the whole point of the ⋮
+   is that it is always one tap away — so it must never scroll out of reach.
+   `position: sticky` on a td needs the background painted, or rows show
+   through while scrolling. */
+.rowmenu-cell{width:38px;text-align:center;position:sticky;right:0;z-index:2;
+  background:var(--surface);box-shadow:-6px 0 8px -6px rgba(0,0,0,.55)}
+tbody tr:hover .rowmenu-cell{background:var(--border)}
+tbody tr.selected .rowmenu-cell{background:#1c2430}
+tbody tr.hl-row .rowmenu-cell{background:var(--hl-tint)}
+th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
+.rowmenu-btn{background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:17px;line-height:1;padding:6px 10px;border-radius:5px;min-width:34px;min-height:30px}
+.rowmenu-btn:hover,.rowmenu-btn:focus{background:var(--border);color:var(--text);outline:none}
+.popover{position:fixed;z-index:80;background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.55);padding:10px;min-width:230px;max-width:92vw}
+.popover[hidden]{display:none}
+.popover h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.hl-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.hl-grid .hl-swatch{width:100%;height:32px;border-radius:6px}
+.popover hr{border:none;border-top:1px solid var(--border);margin:9px 0}
+.popover .pop-note{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.4}
+
+/* ── Body viewers (Pretty / Raw / Hex) ───────────────────────────── */
+.btabs{display:flex;gap:4px;padding:8px 14px 0;flex-wrap:wrap;align-items:center}
+.btab{padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:transparent;color:var(--muted);cursor:pointer;font-size:11px;font-weight:600}
+.btab:hover{background:var(--border);color:var(--text)}
+.btab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.hexwrap{white-space:pre;overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.45}
+/* Hex dump: offset, byte columns, ASCII gutter. The ASCII column is
+   dimmed and keeps alignment via padding rather than a table so the dump
+   stays copy-pasteable as raw text. */
+.hex-off{color:var(--muted)}
+.hex-bytes{color:var(--green)}
+.hex-bytes .n{color:var(--orange)}
+.hex-bytes .x{color:var(--red)}
+.hex-ascii{color:var(--accent)}
+.hex-zero{color:var(--muted)}
+.body-hint{font-size:11px;color:var(--muted);margin:6px 14px 0}
+
+/* ── Host focus + noise controls ────────────────────────────────── */
+.host-pick{max-width:260px}
+.toggle-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-size:12px;cursor:pointer;user-select:none;white-space:nowrap}
+.toggle-chip input{width:auto;margin:0}
+.toggle-chip.on{border-color:var(--accent);color:var(--accent)}
+.noise-summary{font-size:11.5px;color:var(--muted);margin-left:auto;white-space:nowrap}
+.noise-summary b{color:var(--orange)}
+.noise-summary .hidden-by{color:var(--green)}
+.rule-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12.5px}
+.rule-row:last-child{border-bottom:none}
+.rule-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace}
+.rule-row.builtin .grow{color:var(--muted)}
 
 /* ── Connect tab ─────────────────────────────────────────────────── */
 .connect-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
@@ -170,6 +261,9 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
 <!-- ══════════ Live tab — mirrors the TUI ══════════ -->
 <div class="tab-content active" id="t-live">
   <div id="filters">
+    <select id="filter-host" class="host-pick" title="Focus one host — the fastest way to drop browser noise">
+      <option value="">All hosts</option>
+    </select>
     <select id="filter-method">
       <option value="">Method: All</option>
       <option>GET</option><option>POST</option><option>PUT</option>
@@ -184,24 +278,40 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
     </select>
     <input id="filter-url" placeholder="Filter by URL substring…">
     <input id="filter-id" placeholder="ID: 42, 1-20, 7" title="Capture ids — comma/space separated, ranges allowed (e.g. 42, 100-200)">
+    <label class="toggle-chip" id="chip-static" title="Hide images, fonts, css, js and media captures">
+      <input type="checkbox" id="filter-static"> Hide static
+    </label>
+    <label class="toggle-chip" id="chip-hl" title="Show only captures you highlighted">
+      <input type="checkbox" id="filter-highlighted"> Highlighted
+    </label>
+    <button class="btn btn-sm" id="noise-btn" title="Noise rules, scan and cleanup">Noise…</button>
+    <span class="noise-summary" id="noise-summary"></span>
   </div>
-  <div class="split">
+  <div class="split" id="split">
     <div class="table-pane">
       <div class="card">
-        <div class="card-header">Captured requests</div>
+        <div class="card-header">
+          Captured requests
+          <span class="ml-auto text-sm text-muted" id="live-count"></span>
+        </div>
         <div class="live-table-wrap">
           <table>
             <thead><tr>
-              <th style="width:56px">ID</th><th style="width:84px">Method</th>
-              <th style="width:70px">Status</th><th style="width:64px">ms</th><th>URL</th>
+              <th style="width:56px">ID</th><th style="width:78px">Method</th>
+              <th style="width:62px">Status</th><th style="width:58px">Size</th>
+              <th style="width:26%">Host</th><th>Path</th>
+              <th style="width:38px"></th>
             </tr></thead>
             <tbody id="liveb">
-              <tr><td colspan="5" class="empty-note">Waiting for traffic…</td></tr>
+              <tr><td colspan="7" class="empty-note">Waiting for traffic…</td></tr>
             </tbody>
             </table>
         </div>
       </div>
     </div>
+    <div class="splitter" id="splitter" role="separator" aria-orientation="vertical"
+         tabindex="0" title="Drag to resize · click to hide/show the detail panel"
+         aria-label="Resize detail panel"></div>
     <div class="detail-pane">
       <div class="card" id="detail-card" style="height:100%">
         <div class="req-meta" id="req-meta">Select a request…</div>
@@ -209,23 +319,48 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
           <button class="dtab active" data-pane="p-req">Request</button>
           <button class="dtab" data-pane="p-resp">Response</button>
           <button class="dtab" data-pane="p-int">Intruder</button>
+          <button class="dtab" data-pane="p-note">Note</button>
         </div>
         <div class="card-body" style="flex:1;overflow:auto">
           <div class="dpane active" id="p-req">
             <div class="rbody-title">Request line &amp; headers</div>
             <pre class="rbody" id="d-req-line" style="max-height:170px"></pre>
             <div class="rbody-title">Body</div>
-            <pre class="rbody" id="d-req-body" style="max-height:170px"></pre>
+            <div class="btabs" data-body="req">
+              <button class="btab active" data-view="pretty">Pretty</button>
+              <button class="btab" data-view="raw">Raw</button>
+              <button class="btab" data-view="hex">Hex</button>
+              <button class="btn btn-sm ml-auto" data-copy="req">Copy</button>
+            </div>
+            <div class="body-hint" id="req-hint"></div>
+            <pre class="rbody" id="d-req-body" style="max-height:220px"></pre>
           </div>
           <div class="dpane" id="p-resp">
             <div class="rbody-title">Response headers</div>
             <pre class="rbody" id="d-resp-h" style="max-height:170px"></pre>
             <div class="rbody-title">Body</div>
-            <pre class="rbody" id="d-resp-b" style="max-height:240px"></pre>
+            <div class="btabs" data-body="resp">
+              <button class="btab active" data-view="pretty">Pretty</button>
+              <button class="btab" data-view="raw">Raw</button>
+              <button class="btab" data-view="hex">Hex</button>
+              <button class="btn btn-sm ml-auto" data-copy="resp">Copy</button>
+            </div>
+            <div class="body-hint" id="resp-hint"></div>
+            <pre class="rbody" id="d-resp-b" style="max-height:280px"></pre>
           </div>
           <div class="dpane" id="p-int">
             <div class="rbody-title">Intruder results for the selected request</div>
             <div class="rbody" id="d-int" style="max-height:380px">(none yet — run one from the Intruder tab)</div>
+          </div>
+          <div class="dpane" id="p-note">
+            <div class="rbody-title">Note</div>
+            <textarea id="d-note" rows="6" placeholder="Why this capture matters — it survives restarts and is searchable."></textarea>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-sm btn-primary" id="d-note-save">Save note</button>
+              <span class="text-sm text-muted" id="d-note-state"></span>
+            </div>
+            <div class="rbody-title">Highlight</div>
+            <div id="d-note-swatches" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0"></div>
           </div>
         </div>
         <div class="detail-actions">
@@ -233,6 +368,9 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
           <button class="btn btn-sm" id="d-curl">Copy curl</button>
           <button class="btn btn-sm" id="d-body">Copy body</button>
           <button class="btn btn-sm" id="d-save-body" title="Download the stored response body to disk">Save body…</button>
+          <button class="btn btn-sm" id="d-hl" title="Highlight this capture (Burp-style)">Highlight…</button>
+          <button class="btn btn-sm" id="d-note-btn" title="Notes for this capture">Note</button>
+          <button class="btn btn-sm" id="d-add-intruder" title="Send this request to the Intruder with §param§ markers">To Intruder</button>
         </div>
       </div>
     </div>
@@ -263,7 +401,13 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
   <div class="card">
     <div class="card-header">1 · Select request</div>
     <div class="card-body">
-      <div class="form-row"><label>Logged request</label><select id="rsel"><option value="">-- Select --</option></select></div>
+      <div class="form-row"><label>Logged request</label>
+        <div class="inline-pick">
+          <button class="btn" id="rsel-btn" type="button">Pick a captured request…</button>
+          <span class="text-sm text-muted" id="rsel-label">No request selected</span>
+          <input type="hidden" id="rsel" value="">
+        </div>
+      </div>
     </div>
   </div>
   <div class="card">
@@ -408,11 +552,15 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
   </div>
 </div>
 
-<!-- ══════════ Capture picker modal (Intruder: choose a request to fuzz) ══════════ -->
+<!-- ══════════ Capture picker modal (Repeater + Intruder) ══════════ -->
+<!-- One modal, two targets. `pkTarget` records which tab opened it so "Use
+     it" fills the right editor; before this, Repeater used a bare <select>
+     and was the one path that could not filter the way Intruder could. -->
 <div class="modal-backdrop" id="pick-modal">
   <div class="modal">
     <div class="modal-header">
       <span>Pick a captured request</span>
+      <span class="text-sm text-muted" id="pick-for"></span>
       <span class="text-sm text-muted" id="pick-count"></span>
       <div class="ml-auto">
         <button class="btn btn-sm" id="pick-close">Close (Esc)</button>
@@ -433,7 +581,8 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
           <option value="0">Errors</option><option value="pending">Pending</option>
         </select>
         <input id="pk-url" placeholder="URL contains…">
-        <input id="pk-id" placeholder="ID: 42, 1-20, 7" style="max-width:190px">
+        <input id="pk-host" placeholder="Host contains…" class="host-pick">
+        <input id="pk-id" placeholder="ID: 42, 1-20, 7" style="max-width:170px">
       </div>
       <div class="form-row-inline" style="gap:8px;align-items:center">
         <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
@@ -446,10 +595,10 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
         <table>
           <thead><tr>
             <th style="width:56px">ID</th><th style="width:84px">Method</th>
-            <th style="width:70px">Status</th><th>URL</th>
+            <th style="width:70px">Status</th><th style="width:24%">Host</th><th>Path</th>
           </tr></thead>
           <tbody id="pk-rows">
-            <tr><td colspan="4" class="empty-note">Loading…</td></tr>
+            <tr><td colspan="5" class="empty-note">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -457,6 +606,56 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
         <button class="btn btn-sm btn-primary" id="pick-use" disabled>Use it</button>
         <span class="text-sm text-muted" id="pick-sel">Nothing selected</span>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ Row overflow menu (⋮) — highlight / note / repeat ══════════ -->
+<!-- A popover rather than a contextmenu event: right-click does not exist on
+     Android, so every row gets a real touch target that works everywhere. -->
+<div class="popover" id="row-pop" hidden>
+  <h4>Highlight capture</h4>
+  <div class="hl-grid" id="row-pop-swatches"></div>
+  <hr>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <button class="btn btn-sm" id="row-pop-note">Add note…</button>
+    <button class="btn btn-sm" id="row-pop-rep">Repeater</button>
+    <button class="btn btn-sm" id="row-pop-int">To Intruder</button>
+  </div>
+  <div class="pop-note">Highlights and notes are saved with the capture and survive
+    restarts. Filter by them with the <b>Highlighted</b> chip above.</div>
+</div>
+
+<!-- ══════════ Noise modal (rules, dry-run scan, cleanup) ══════════ -->
+<div class="modal-backdrop" id="noise-modal">
+  <div class="modal" style="width:min(760px,94vw)">
+    <div class="modal-header">
+      <span>Noise filter</span>
+      <span class="text-sm text-muted" id="noise-count"></span>
+      <div class="ml-auto">
+        <button class="btn btn-sm" id="noise-close">Close (Esc)</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin:0 0 10px">
+        Browser traffic drowns out the target. Enabled rules are dropped at
+        <b>capture time</b>, so they never enter the DB. Static assets (images,
+        fonts, css, js, media) are always eligible — the bundled list covers
+        common telemetry and ad hosts and ships <b>disabled</b>.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <input id="noise-add" placeholder="Host to ignore, e.g. *.telemetry.example.com" style="flex:1;min-width:200px">
+        <button class="btn btn-sm btn-primary" id="noise-add-btn">Add</button>
+        <button class="btn btn-sm" id="noise-builtin">Enable bundled list</button>
+      </div>
+      <div id="noise-rules" style="flex:1;min-height:140px;overflow:auto"></div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-sm" id="noise-scan-btn">Scan (dry run)</button>
+        <button class="btn btn-sm btn-danger" id="noise-clean-btn" disabled>Delete noise captures…</button>
+        <span class="text-sm text-muted" id="noise-out"></span>
+      </div>
+      <div id="noise-preview" style="max-height:190px;overflow:auto;margin-top:8px"></div>
     </div>
   </div>
 </div>
@@ -514,6 +713,50 @@ async function api(url, opts = {}) {
   return { ok: r.ok, status: r.status, data };
 }
 function esc(s) { if (s == null) return ""; const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+// ── URL splitting (Host / Path columns) ───────────────────────────
+// The Host and Path columns are what a tester actually scans: a wall of
+// repeated hosts is noise, and the path is the part that identifies the
+// endpoint. Kept as text-only helpers so they can be unit-checked and
+// reused by the picker and the export table alike.
+function urlParts(url) {
+  const s = String(url || "");
+  const m = s.match(/^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i);
+  let host = m ? m[1] : "";
+  let rest = m ? s.slice(m[0].length) : s;
+  if (host.indexOf("@") >= 0) host = host.slice(host.indexOf("@") + 1);
+  // Strip the port, but keep IPv6 literals (bracketed) intact.
+  if (/^\[.*\]/.test(host)) {
+    const end = host.indexOf("]");
+    if (end >= 0) host = host.slice(0, end + 1);
+  } else if (host.indexOf(":") >= 0) {
+    host = host.slice(0, host.indexOf(":"));
+  }
+  const q = rest.indexOf("?");
+  return {
+    host: host,
+    path: q >= 0 ? rest.slice(0, q) : rest,
+    query: q >= 0 ? rest.slice(q + 1) : "",
+  };
+}
+function shortHost(host) {
+  // www./m./mobile prefixes are noise when comparing hosts at a glance.
+  return String(host || "").replace(/^(www|m|mobile|amp)\./i, "");
+}
+function fmtSize(n) {
+  const v = Number(n);
+  if (!isFinite(v) || v <= 0) return "—";
+  if (v < 1024) return v + "B";
+  if (v < 1024 * 1024) return (v / 1024).toFixed(v < 10240 ? 1 : 0) + "K";
+  return (v / 1048576).toFixed(1) + "M";
+}
+function respSizeOf(r) {
+  // Prefer the recorded original length; fall back to what we stored, and
+  // treat "0" as unknown (many rows record a 0-length asset response).
+  if (r.response_body_len) return r.response_body_len;
+  if (r.response_body) return String(r.response_body).length;
+  return null;
+}
 function fmtH(r) {
   if (!r) return "(none)";
   try {
@@ -540,6 +783,47 @@ function scls(c) {
 function mcl(m) { return ["GET","POST","PUT","DELETE","PATCH"].indexOf(m) >= 0 ? "m-" + m : "m-HEAD"; }
 function codeLabel(c) { return c === null || c === undefined ? "…" : (c === 0 ? "ERR" : String(c)); }
 function msLabel(v) { return (typeof v === "number") ? Math.round(v) : "—"; }
+
+// ── Highlight palette ──────────────────────────────────────────────
+// Fixed Burp-style palette: eight colors plus "clear". The server rejects
+// anything else (see Database.set_highlight), so these values are the whole
+// vocabulary — adding one means changing both sides.
+const HL_PALETTE = ["#f85149", "#d29922", "#e3b341", "#3fb950", "#39c5cf", "#58a6ff", "#bc8cff", "#f778ba"];
+const HL_TINTS = {
+  "#f85149": "rgba(248,81,73,.13)", "#d29922": "rgba(210,153,34,.13)",
+  "#e3b341": "rgba(227,179,65,.13)", "#3fb950": "rgba(63,185,80,.13)",
+  "#39c5cf": "rgba(57,197,207,.13)", "#58a6ff": "rgba(88,166,255,.13)",
+  "#bc8cff": "rgba(188,140,255,.13)", "#f778ba": "rgba(247,120,186,.13)",
+};
+function hlTint(color) { return HL_TINTS[color] || "transparent"; }
+function rowHlStyle(color) {
+  // Only palette values are ever passed through. The server rejects anything
+  // else (Database.set_highlight), but this helper is the last stop before a
+  // value lands inside a style attribute, so it refuses independently
+  // rather than trusting its caller.
+  if (!color || HL_PALETTE.indexOf(String(color).toLowerCase()) < 0) return "";
+  return ' style="--hl:' + color + ';--hl-tint:' + hlTint(color) + '"';
+}
+// Shared swatch builder — used by the row menu, the detail pane and the
+// note tab so the three entry points can never drift apart.
+function buildSwatches(container, onPick, current) {
+  container.innerHTML = "";
+  HL_PALETTE.forEach(c => {
+    const b = document.createElement("button");
+    b.className = "hl-swatch" + (c === current ? " active" : "");
+    b.style.background = c;
+    b.title = "Highlight " + c;
+    b.setAttribute("aria-label", "Highlight " + c);
+    b.addEventListener("click", () => onPick(c));
+    container.appendChild(b);
+  });
+  const clr = document.createElement("button");
+  clr.className = "btn btn-sm hl-clear";
+  clr.textContent = "Clear";
+  clr.title = "Remove highlight";
+  clr.addEventListener("click", () => onPick(""));
+  container.appendChild(clr);
+}
 function asCurl(e) {
   let parts = ["curl", "-sS", "-i", "-X", (e.method || "GET").toUpperCase(), "'" + String(e.url || "").replace(/'/g, "'\\''") + "'"];
   try {
@@ -624,6 +908,13 @@ function restoreSession() {
     if (fs) document.getElementById("filter-status").value = fs;
     if (fu) document.getElementById("filter-url").value = fu;
     if (fi) document.getElementById("filter-id").value = fi;
+    const fh = localStorage.getItem("mp.filter.host");
+    if (fh) document.getElementById("filter-host").value = fh;
+    const fhs = localStorage.getItem("mp.filter-highlighted");
+    if (fhs) {
+      document.getElementById("filter-highlighted").checked = true;
+      document.getElementById("chip-hl").classList.add("on");
+    }
     const sid = parseInt(localStorage.getItem("mp.selected"), 10);
     if (sid) state.selectedId = sid;  // validated once rows load
   } catch (e) { /* storage unavailable — defaults are fine */ }
@@ -674,6 +965,9 @@ function filterValues() {
     status: document.getElementById("filter-status").value,
     url: document.getElementById("filter-url").value.trim(),
     id: document.getElementById("filter-id").value.trim(),
+    host: document.getElementById("filter-host").value,
+    hide_static: document.getElementById("filter-static").checked,
+    highlighted_only: document.getElementById("filter-highlighted").checked,
   };
 }
 function filtersQ(extra) {
@@ -683,6 +977,11 @@ function filtersQ(extra) {
   if (v.status) p.set("status", v.status);
   if (v.url) p.set("url", v.url);
   if (v.id) p.set("id", v.id);
+  if (v.host) p.set("host", v.host);
+  // Booleans are always sent (0/1) so clearing a chip is unambiguous
+  // server-side rather than "absent means off".
+  p.set("hide_static", v.hide_static ? "1" : "0");
+  p.set("highlighted_only", v.highlighted_only ? "1" : "0");
   if (extra) for (const [k, val] of Object.entries(extra)) p.set(k, val);
   return p.toString();
 }
@@ -709,26 +1008,58 @@ function matches(r) {
   else if (v.status === "0") { if (c !== 0) return false; }
   else if (v.status) { if (typeof c !== "number" || Math.floor(c / 100) !== parseInt(v.status, 10)) return false; }
   if (v.url && String(r.url || "").toLowerCase().indexOf(v.url.toLowerCase()) === -1) return false;
+  if (v.host && urlParts(r.url || "").host.toLowerCase().indexOf(v.host.toLowerCase()) === -1) return false;
+  if (v.hide_static && isStatic(r)) return false;
+  if (v.highlighted_only && !r.highlight) return false;
   if (!idMatches(v.id, r.id)) return false;
   return true;
 }
 function renderLive() {
   const tb = document.getElementById("liveb");
   const rows = state.rows.filter(matches);
+  const total = state.rows.length;
+  const cnt = document.getElementById("live-count");
+  if (cnt) {
+    cnt.textContent = rows.length === total
+      ? total + (total === 1 ? " capture" : " captures")
+      : rows.length + " of " + total + " shown";
+  }
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="5" class="empty-note">No matching requests — route traffic through the proxy and the feed fills up.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="7" class="empty-note">' +
+      (total ? "No matching requests — every captured row is filtered out. Turn off a chip above."
+             : "Waiting for traffic… route the browser through the proxy and the feed fills up.") +
+      "</td></tr>";
     return;
   }
-  tb.innerHTML = rows.map(r =>
-    '<tr class="log-row' + (r.id === state.selectedId ? " selected" : "") + '" data-id="' + r.id + '">' +
-    "<td>" + r.id + '</td>' +
-    '<td><span class="method ' + mcl(r.method) + '">' + esc(r.method) + "</span></td>" +
-    '<td class="status ' + scls(r.response_code) + '">' + codeLabel(r.response_code) + "</td>" +
-    '<td class="ms-cell">' + msLabel(r.total_ms) + "</td>" +
-    '<td class="trunc">' + esc(r.url) + "</td></tr>"
-  ).join("");
+  tb.innerHTML = rows.map(r => {
+    const p = urlParts(r.url);
+    const hl = r.highlight || "";
+    const note = r.note ? " 📝" : "";
+    const title = r.url + note + (hl ? "  · highlighted" : "");
+    const aria = "Actions for capture " + r.id;
+    const menuBtn = '<button class="rowmenu-btn" data-rowmenu="' + r.id +
+      '" aria-label="' + aria + '" title="Highlight, note, resend">⋮</button>';
+    return '<tr class="log-row' + (r.id === state.selectedId ? " selected" : "") +
+      (hl ? " hl-row" : "") + '" data-id="' + r.id + '"' + rowHlStyle(hl) +
+      ' title="' + esc(title) + '">' +
+      "<td>" + r.id + '</td>' +
+      '<td><span class="method ' + mcl(r.method) + '">' + esc(r.method) + "</span></td>" +
+      '<td class="status ' + scls(r.response_code) + '">' + codeLabel(r.response_code) + "</td>" +
+      '<td class="ms-cell">' + fmtSize(respSizeOf(r)) + "</td>" +
+      '<td class="trunc host-cell" title="' + esc(p.host) + '">' + esc(shortHost(p.host)) + "</td>" +
+      '<td class="trunc">' + esc(p.path || "/") +
+        (p.query ? '<span class="text-muted">?' + esc(p.query) + "</span>" : "") + note + "</td>" +
+      '<td class="rowmenu-cell">' + menuBtn + "</td></tr>";
+  }).join("");
   tb.querySelectorAll("tr.log-row").forEach(tr => {
     tr.addEventListener("click", () => selectRow(parseInt(tr.dataset.id, 10)));
+  });
+  tb.querySelectorAll("[data-rowmenu]").forEach(btn => {
+    // stopPropagation so opening the menu does not also select-and-scroll
+    btn.addEventListener("click", ev => {
+      ev.stopPropagation();
+      openRowMenu(parseInt(btn.dataset.rowmenu, 10), btn);
+    });
   });
 }
 function selectRow(id) {
@@ -750,6 +1081,7 @@ async function pollLive() {
     if (!Array.isArray(rows)) return;
     state.rows = rows;
     renderLive();
+    updateNoiseSummary();
     if (state.selectedId != null) {
       const e = state.rows.find(x => x.id === state.selectedId);
       if (e) showDetail(e); // refresh detail (pending rows fill in)
@@ -779,8 +1111,490 @@ document.getElementById("filter-id").addEventListener("input", ev => {
   renderLive();
   onFilterTextInput();
 });
+// Chip/host filters are coarse controls: repaint locally at once, then
+// re-query so the server-side window contains what the user asked for.
+["filter-host", "filter-static", "filter-highlighted"].forEach(id => {
+  const el = document.getElementById(id);
+  const key = "mp.filter." + id.replace("filter-", "");
+  el.addEventListener("change", ev => {
+    saveSession(key, ev.target.type === "checkbox" ? (ev.target.checked ? "1" : "") : ev.target.value);
+    renderLive();
+    onFilterTextInput();
+    refreshNoiseSummary();
+  });
+  if (id === "filter-static") el.addEventListener("change", ev =>
+    document.getElementById("chip-static").classList.toggle("on", ev.target.checked));
+  if (id === "filter-highlighted") el.addEventListener("change", ev =>
+    document.getElementById("chip-hl").classList.toggle("on", ev.target.checked));
+});
+
+// ── Host focus picker ────────────────────────────────────────────────
+// Populated from /api/hosts so the target is one tap away, and the option
+// label carries the row count — the fastest way to see which host is
+// filling the DB ("60 captures — pocket images" explains the noise instantly).
+async function refreshHostOptions() {
+  const sel = document.getElementById("filter-host");
+  const pkHost = document.getElementById("pk-host");
+  if (!sel) return;
+  const { data } = await api("/api/hosts?limit=60");
+  const hosts = (data && data.hosts) || [];
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All hosts</option>';
+  hosts.forEach(h => {
+    const o = document.createElement("option");
+    o.value = h.host;
+    o.textContent = h.host + "  (" + h.count + ")";
+    sel.appendChild(o);
+  });
+  if (cur) sel.value = cur;
+  // Mirror into the picker modal so both stay in step.
+  if (pkHost) {
+    const pcur = pkHost.value;
+    pkHost.innerHTML = '<option value="">Any host</option>';
+    hosts.forEach(h => {
+      const o = document.createElement("option");
+      o.value = h.host;
+      o.textContent = h.host;
+      pkHost.appendChild(o);
+    });
+    if (pcur) pkHost.value = pcur;
+  }
+  updateNoiseSummary(hosts);
+}
+
+// ── Noise summary line ──────────────────────────────────────────────
+// Shows how much is being hidden right now. This is the bit that turns
+// "why is my log full of junk?" into a number the user can act on.
+let noiseHosts = [];
+function updateNoiseSummary(hosts) {
+  if (hosts) noiseHosts = hosts;
+  const el = document.getElementById("noise-summary");
+  if (!el) return;
+  const shown = state.rows.filter(matches).length;
+  const fetched = state.rows.length;
+  const v = filterValues();
+  const parts = [];
+  if (fetched > shown) {
+    parts.push('<span class="hidden-by">' + shown + " shown / " + fetched + " fetched</span>");
+  }
+  const noisy = noiseHosts.filter(h => h.count > 0 && !(v.host && h.host.indexOf(v.host) >= 0));
+  if (noisy.length) {
+    const top = noisy.slice(0, 2).map(h => h.host.split(".").slice(-2).join(".") + " (" + h.count + ")").join(", ");
+    parts.push("<b>" + top + "</b>" + (noisy.length > 2 ? " +" + (noisy.length - 2) + " more" : ""));
+  }
+  el.innerHTML = parts.join(" · ");
+  el.title = "Hosts in this capture DB (busiest first). Click Noise… to filter or clean.";
+}
+function refreshNoiseSummary() { updateNoiseSummary(); }
+
+// ── Noise modal ─────────────────────────────────────────────────────
+const noiseModal = document.getElementById("noise-modal");
+let noisePreview = null;
+function renderNoiseRules(rules) {
+  const box = document.getElementById("noise-rules");
+  const enabled = rules.filter(r => r.enabled).length;
+  document.getElementById("noise-count").textContent =
+    enabled + " of " + rules.length + " enabled";
+  box.innerHTML = rules.map(r =>
+    '<div class="rule-row' + (r.builtin ? " builtin" : "") + '">' +
+    '<input type="checkbox" data-rule="' + r.id + '"' + (r.enabled ? " checked" : "") +
+      ' style="width:auto;flex:none" aria-label="Enable rule ' + esc(r.value) + '">' +
+    '<span class="grow" title="' + esc(r.value) + '">' + esc(r.value) +
+      (r.builtin ? ' <span class="text-muted">(bundled)</span>' : "") + "</span>" +
+    '<button class="btn btn-sm" data-del-rule="' + r.id + '">Remove</button></div>'
+  ).join("") || '<div class="empty-note">No noise rules yet.</div>';
+  box.querySelectorAll("[data-rule]").forEach(cb =>
+    cb.addEventListener("change", async ev => {
+      const { data } = await api("/api/noise/rules/" + cb.dataset.rule, {
+        method: "PATCH", body: JSON.stringify({ enabled: ev.target.checked }),
+      });
+      if (data && data.rules) renderNoiseRules(data.rules);
+      toast(ev.target.checked ? "Rule enabled" : "Rule disabled");
+    }));
+  box.querySelectorAll("[data-del-rule]").forEach(b =>
+    b.addEventListener("click", async () => {
+      const { data } = await api("/api/noise/rules/" + b.dataset.delRule, { method: "DELETE" });
+      if (data && data.rules) renderNoiseRules(data.rules);
+    }));
+}
+async function loadNoiseRules() {
+  const { data } = await api("/api/noise/rules");
+  if (data && data.rules) renderNoiseRules(data.rules);
+}
+document.getElementById("noise-btn").addEventListener("click", async () => {
+  noiseModal.classList.add("open");
+  document.getElementById("noise-preview").innerHTML = "";
+  document.getElementById("noise-out").textContent = "";
+  document.getElementById("noise-clean-btn").disabled = true;
+  await loadNoiseRules();
+  await runNoiseScan();
+});
+document.getElementById("noise-close").addEventListener("click", () => noiseModal.classList.remove("open"));
+noiseModal.addEventListener("click", ev => { if (ev.target === noiseModal) noiseModal.classList.remove("open"); });
+document.getElementById("noise-add-btn").addEventListener("click", async () => {
+  const input = document.getElementById("noise-add");
+  const v = input.value.trim();
+  if (!v) return;
+  const { ok, data } = await api("/api/noise/rules", {
+    method: "POST", body: JSON.stringify({ value: v, kind: "host", enabled: true }),
+  });
+  if (!ok) { toast(data.error || "could not add rule", true); return; }
+  input.value = "";
+  renderNoiseRules(data.rules);
+  toast("Rule added — new traffic to " + v + " will not be captured");
+});
+document.getElementById("noise-add").addEventListener("keydown", ev => {
+  if (ev.key === "Enter") document.getElementById("noise-add-btn").click();
+});
+document.getElementById("noise-builtin").addEventListener("click", async () => {
+  const { data } = await api("/api/noise/rules", {
+    method: "POST", body: JSON.stringify({ enable_builtin: true }),
+  });
+  if (data && data.rules) renderNoiseRules(data.rules);
+  toast("Bundled telemetry/ad rules enabled");
+  await runNoiseScan();
+});
+async function runNoiseScan() {
+  const out = document.getElementById("noise-out");
+  out.textContent = "Scanning…";
+  const { data } = await api("/api/noise/scan");
+  if (!data) { out.textContent = ""; return; }
+  noisePreview = data;
+  const cleanBtn = document.getElementById("noise-clean-btn");
+  cleanBtn.disabled = !data.matched;
+  cleanBtn.textContent = data.matched ? "Delete " + data.matched + " noise captures…" : "Nothing to delete";
+  out.innerHTML = "<b>" + data.matched + "</b> noise · " + data.keep + " kept";
+  document.getElementById("noise-preview").innerHTML = (data.by_host || []).map(h =>
+    '<div class="rule-row"><span class="grow">' + esc(h.host) + "</span>" +
+    '<span class="text-muted">' + h.removed + " row(s)</span></div>").join("");
+}
+document.getElementById("noise-scan-btn").addEventListener("click", runNoiseScan);
+document.getElementById("noise-clean-btn").addEventListener("click", async () => {
+  if (!noisePreview || !noisePreview.matched) return;
+  const n = noisePreview.matched;
+  if (!confirm("Delete " + n + " noise capture(s) from the DB?\n\n" +
+               "A timestamped backup is written first, so this is reversible.\n" +
+               "(The Noise… rules themselves stay enabled for future traffic.)")) return;
+  const { ok, data } = await api("/api/noise/clean", {
+    method: "POST", body: JSON.stringify({ confirm: true }),
+  });
+  if (!ok) { toast(data.error || "cleanup failed", true); return; }
+  toast("Removed " + data.removed + " captures · backup: " + (data.backup || "none"));
+  state.selectedId = null;
+  await refreshHostOptions();
+  await runNoiseScan();
+  pollLive();
+});
+
+// ── Resizable / collapsible split ────────────────────────────────────
+// The detail pane width lives in one CSS custom property (--split, as a
+// percentage) so drag, collapse and the mobile breakpoint all control the
+// same value. Persisted so the layout survives a refresh — on a phone you
+// usually want it collapsed, on a desktop you usually want it wide.
+const splitEl = document.getElementById("split");
+const splitter = document.getElementById("splitter");
+function setSplit(pct) {
+  const p = Math.min(Math.max(pct, 22), 75);
+  splitEl.style.setProperty("--split", p + "%");
+  saveSession("mp.split", String(p));
+}
+function isCollapsed() { return splitEl.classList.contains("collapsed"); }
+function setCollapsed(on) {
+  splitEl.classList.toggle("collapsed", !!on);
+  splitter.classList.toggle("collapsed", !!on);
+  splitter.setAttribute("aria-expanded", on ? "false" : "true");
+  saveSession("mp.split.collapsed", on ? "1" : "0");
+}
+function initSplitter() {
+  const saved = parseFloat(localStorage.getItem("mp.split") || "");
+  setSplit(isFinite(saved) && saved ? saved : 42);
+  setCollapsed(localStorage.getItem("mp.split.collapsed") === "1");
+  // Drag. Pointer events cover mouse, touch and pen in one path, which
+  // matters here: this dashboard is commonly used from a phone over a port
+  // forward, where a mouse-only handler simply does not work.
+  let dragging = false;
+  let moved = false;   // did this gesture actually resize anything?
+  const START = 4;     // px of slop before a press counts as a drag
+  const onMove = ev => {
+    if (!dragging) return;
+    ev.preventDefault();
+    const x = (ev.touches ? ev.touches[0].clientX : ev.clientX);
+    if (Math.abs(x - startX) > START) moved = true;
+    const r = splitEl.getBoundingClientRect();
+    setSplit(((r.right - x) / r.width) * 100);
+  };
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove("dragging");
+    document.body.style.userSelect = "";
+  };
+  let startX = 0;
+  splitter.addEventListener("pointerdown", ev => {
+    dragging = true;
+    moved = false;
+    startX = (ev.touches ? ev.touches[0].clientX : ev.clientX);
+    splitter.classList.add("dragging");
+    document.body.style.userSelect = "none";
+    if (splitter.setPointerCapture && ev.pointerId != null) {
+      try { splitter.setPointerCapture(ev.pointerId); } catch (e) {}
+    }
+  });
+  window.addEventListener("pointermove", onMove, { passive: false });
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onUp);
+  // Click (not drag) toggles — the quick "hide / show the right panel" action.
+  // Guarded on `moved`: without it every resize would end with the pane
+  // collapsing, because a drag is followed by a click on the handle.
+  splitter.addEventListener("click", () => {
+    if (moved) { moved = false; return; }
+    setCollapsed(!isCollapsed());
+  });
+  // Keyboard: arrows resize, Enter/Space toggles, so the handle is usable
+  // without a pointer.
+  splitter.addEventListener("keydown", ev => {
+    const cur = parseFloat(localStorage.getItem("mp.split") || "42");
+    if (ev.key === "ArrowLeft") { setSplit(cur + 4); ev.preventDefault(); }
+    else if (ev.key === "ArrowRight") { setSplit(cur - 4); ev.preventDefault(); }
+    else if (ev.key === "Enter" || ev.key === " ") { setCollapsed(!isCollapsed()); ev.preventDefault(); }
+  });
+}
+// CSS side of the above: the detail pane takes the stored percentage and
+// the table pane takes the rest.
+document.addEventListener("DOMContentLoaded", initSplitter);
+
+// ── Highlight persistence ───────────────────────────────────────────
+async function setHighlight(id, color, note) {
+  const body = {};
+  if (color !== undefined) body.highlight = color;
+  if (note !== undefined) body.note = note;
+  const { ok, data } = await api("/api/logs/" + id, {
+    method: "PATCH", body: JSON.stringify(body),
+  });
+  if (!ok) { toast(data.error || "could not save", true); return false; }
+  const row = state.rows.find(r => r.id === id);
+  if (row) {
+    row.highlight = data.highlight;
+    row.note = data.note;
+    renderLive();
+  }
+  return true;
+}
+
+// ── Row overflow menu (⋮) ───────────────────────────────────────────
+// Opened from the per-row ⋮ button. Anchored to the button but clamped to
+// the viewport, because on a narrow screen a fixed-position popover sized
+// to the button would otherwise render off-screen.
+let rowPopId = null;
+function openRowMenuAt(id, anchor, rect) {
+  rowPopId = id;
+  const pop = document.getElementById("row-pop");
+  const row = state.rows.find(r => r.id === id);
+  const cur = row ? (row.highlight || "") : "";
+  buildSwatches(document.getElementById("row-pop-swatches"), c => {
+    setHighlight(id, c);
+    closeRowMenu();
+  }, cur);
+  pop.hidden = false;
+  // Place below the anchor, flipping above / clamping left when the popover
+  // would run off-screen. On a narrow phone the anchor is often off to the
+  // right, so the clamp is what makes this usable at all.
+  const r = rect || anchor.getBoundingClientRect();
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  let left = r.left;
+  if (left + w > window.innerWidth - 8) left = Math.max(8, window.innerWidth - w - 8);
+  let top = r.bottom + 6;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+  pop.style.left = left + "px";
+  pop.style.top = top + "px";
+}
+function openRowMenu(id, anchor) { openRowMenuAt(id, anchor); }
+function closeRowMenu() {
+  document.getElementById("row-pop").hidden = true;
+  rowPopId = null;
+}
+document.getElementById("row-pop-note").addEventListener("click", () => {
+  const id = rowPopId;
+  closeRowMenu();
+  if (id == null) return;
+  selectRow(id);
+  document.querySelector('.dtab[data-pane="p-note"]').click();
+  document.getElementById("d-note").focus();
+});
+document.getElementById("row-pop-rep").addEventListener("click", () => {
+  const id = rowPopId;
+  closeRowMenu();
+  if (id == null) return;
+  selectRow(id);
+  openRepModal(state.rows.find(r => r.id === id));
+});
+document.getElementById("row-pop-int").addEventListener("click", () => {
+  const id = rowPopId;
+  closeRowMenu();
+  if (id == null) return;
+  document.querySelector('.tab[data-tab="intruder"]').click();
+  applyIntruderRequest(id);
+  toast("Loaded into Intruder");
+});
+document.addEventListener("click", ev => {
+  const pop = document.getElementById("row-pop");
+  if (pop.hidden) return;
+  if (pop.contains(ev.target) || ev.target.closest("[data-rowmenu]")) return;
+  closeRowMenu();
+});
+window.addEventListener("scroll", closeRowMenu, true);
+window.addEventListener("resize", closeRowMenu);
 
 // ── detail panes ─────────────────────────────────────────────────────
+// ── Body viewers: Pretty / Raw / Hex ────────────────────────────────
+// One renderer per body, three views. `state.bodyView` remembers the last
+// view the user chose so switching between Request and Response keeps it,
+// which is what you want when you are hunting for a byte offset.
+state.bodyView = state.bodyView || { req: "pretty", resp: "pretty" };
+state.bodyText = state.bodyText || { req: "", resp: "" };
+
+// Latin-1 preserves every byte as one code unit, so byteOffset === string
+// index. That is the whole reason a hex dump can be built in JS: no
+// TextEncoder round-trip, no replacement chars, exact offsets.
+function toBytes(str) {
+  const s = String(str == null ? "" : str);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+  return out;
+}
+function hexDump(str, bytesPerRow) {
+  const b = toBytes(str);
+  const cols = bytesPerRow || 16;
+  const lines = [];
+  const printable = c => (c >= 0x20 && c < 0x7f);
+  for (let off = 0; off < b.length; off += cols) {
+    const chunk = b.subarray(off, off + cols);
+    let hex = "", ascii = "", zeros = true;
+    for (let i = 0; i < cols; i++) {
+      if (i < chunk.length) {
+        const c = chunk[i];
+        const pair = c.toString(16).padStart(2, "0");
+        hex += pair + " ";
+        ascii += printable(c) ? String.fromCharCode(c) : ".";
+        if (c !== 0) zeros = false;
+      } else {
+        hex += "   ";
+      }
+      if (i === cols / 2 - 1) hex += " "; // gutter between byte halves
+    }
+    const addr = off.toString(16).padStart(8, "0");
+    // An all-zero row (classic NUL padding in binary blobs) is dimmed so a
+    // long run of them stays readable.
+    lines.push({ addr, hex: hex.replace(/\s+$/, ""), ascii,
+                 cls: zeros ? "hex-zero" : "" });
+  }
+  if (!lines.length) return "";
+  return lines;
+}
+// Returns display HTML for the chosen view. Hex is returned as plain text
+// so it stays selectable and copy-pasteable; Pretty/Raw go through esc().
+function renderBodyView(which) {
+  const text = state.bodyText[which] || "";
+  const view = state.bodyView[which] || "pretty";
+  const el = document.getElementById(which === "req" ? "d-req-body" : "d-resp-b");
+  const hint = document.getElementById(which === "req" ? "req-hint" : "resp-hint");
+  if (!el) return;
+  const bytes = toBytes(text).length;
+  const isText = /^[\s\x00-\x08\x0b\x0c\x0e-\x1f\x7f -￿]*$/.test(text) &&
+                 !/�/.test(text);
+  if (!text) {
+    el.classList.remove("hexwrap");
+    el.textContent = "(empty body)";
+    if (hint) hint.textContent = "";
+    return;
+  }
+  if (view === "hex") {
+    el.classList.add("hexwrap");
+    const lines = hexDump(text);
+    // 32 bytes per row keeps the ASCII gutter readable in the pane.
+    const html = lines.map(l =>
+      '<span class="hex-off">' + l.addr + "</span>  " +
+      '<span class="hex-bytes ' + l.cls + '">' + esc(l.hex) + "</span>  " +
+      '<span class="hex-ascii">' + esc(l.ascii) + "</span>").join("\n");
+    el.innerHTML = html;
+    if (hint) {
+      hint.textContent = bytes + " bytes · " + Math.ceil(bytes / 32) + " rows · " +
+        "offset column is the byte offset";
+    }
+    return;
+  }
+  el.classList.remove("hexwrap");
+  if (view === "raw") {
+    // Raw shows the bytes as escaped text: control characters and non-ASCII
+    // made visible, so what a decoder did (or a filter stripped) is visible.
+    let s = "";
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      if (c === 0) s += "\\x00";
+      else if (c === 9) s += "\\t";
+      else if (c === 10) s += "\\n";
+      else if (c === 13) s += "\\r";
+      else if (c < 32 || c === 127) s += "\\x" + c.toString(16).padStart(2, "0");
+      else if (c > 126) s += "\\u" + c.toString(16).padStart(4, "0");
+      else s += text[i];
+    }
+    el.textContent = s;
+    if (hint) hint.textContent = bytes + " bytes · control and non-ASCII characters escaped";
+    return;
+  }
+  // Pretty: indent JSON, fall back to the text as-is.
+  const trimmed = text.trim();
+  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    try {
+      el.textContent = JSON.stringify(JSON.parse(trimmed), null, 2);
+      if (hint) hint.textContent = "JSON re-indented · " + bytes + " bytes";
+      return;
+    } catch (x) { /* not valid JSON — fall through to raw text */ }
+  }
+  el.textContent = text;
+  if (hint) {
+    hint.textContent = isText ? bytes + " bytes · not JSON, shown as received"
+                              : bytes + " bytes · binary content, use Hex or Raw";
+  }
+}
+// Client-side twin of is_static_asset() in db.py: a known asset MIME wins, a
+// known non-asset MIME loses, and only an absent type falls back to the URL
+// extension. Mirrored so the "Hide static" chip repaints instantly; the SQL
+// filter is authoritative on the next poll.
+const STATIC_EXT = new Set(["png","jpg","jpeg","gif","webp","avif","bmp","ico","svg","tif","tiff",
+  "woff","woff2","ttf","otf","eot","css","js","mjs","map","mp3","mp4","webm","ogg","wav","aac","flac"]);
+const STATIC_CT = ["image/","font/","audio/","video/","text/css","application/javascript","text/javascript"];
+function isStatic(r) {
+  const ct = String(r.content_type || "").split(";")[0].trim().toLowerCase();
+  if (ct) return STATIC_CT.some(p => ct.startsWith(p));
+  const p = urlParts(r.url || "").path;
+  const tail = p.slice(p.lastIndexOf("/") + 1);
+  const dot = tail.lastIndexOf(".");
+  if (dot >= 0) {
+    const ext = tail.slice(dot + 1).toLowerCase();
+    if (/^[a-z0-9]+$/.test(ext) && STATIC_EXT.has(ext)) return true;
+  }
+  return false;
+}
+document.querySelectorAll(".btabs[data-body]").forEach(group => {
+  group.addEventListener("click", ev => {
+    const tab = ev.target.closest(".btab");
+    if (!tab) return;
+    const which = group.dataset.body;
+    state.bodyView[which] = tab.dataset.view;
+    group.querySelectorAll(".btab").forEach(b => b.classList.remove("active"));
+    tab.classList.add("active");
+    renderBodyView(which);
+  });
+});
+document.querySelectorAll("[data-copy]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const which = btn.dataset.copy;
+    copyText(state.bodyText[which] || "", (which === "req" ? "Request" : "Response") + " body copied");
+  });
+});
+
 function showDetail(e) {
   const c = e.response_code;
   const reqLen = e.request_body_len || 0, respLen = e.response_body_len || 0;
@@ -791,23 +1605,38 @@ function showDetail(e) {
     '<span class="status ' + scls(c) + '">' + codeLabel(c) + "</span> · " +
     "ttfb " + msLabel(e.ttfb_ms) + "ms · total " + msLabel(e.total_ms) + "ms · " +
     esc(e.url) + reqTrunc + respTrunc;
-  if (reqTrunc) document.getElementById("d-req-body").textContent += "\n\n⚠ body truncated at " + (e.body || "").length + " B (original " + reqLen + " B)";
-  if (respTrunc) document.getElementById("d-resp-b").textContent += "\n\n⚠ body truncated at " + (e.response_body || "").length + " B (original " + respLen + " B)";
   document.getElementById("d-req-line").textContent =
     (e.method || "") + " " + (e.url || "") + "\n" + fmtH(e.headers);
-  document.getElementById("d-req-body").textContent = e.body || "(empty body)";
+  state.bodyText.req = (e.body || "") +
+    (reqTrunc ? "\n\n⚠ body truncated at " + (e.body || "").length + " B (original " + reqLen + " B)" : "");
+  renderBodyView("req");
   if (c === null || c === undefined) {
     document.getElementById("d-resp-h").textContent = "(pending — response not captured yet)";
-    document.getElementById("d-resp-b").textContent = "";
+    state.bodyText.resp = "";
+    renderBodyView("resp");
   } else if (c === 0) {
     let err = "flow error";
     try { err = (JSON.parse(e.response_headers || "{}")._error) || err; } catch (x) {}
     document.getElementById("d-resp-h").textContent = "(transport error: " + err + ")";
-    document.getElementById("d-resp-b").textContent = "";
+    state.bodyText.resp = "";
+    renderBodyView("resp");
   } else {
     document.getElementById("d-resp-h").textContent = fmtH(e.response_headers);
-    document.getElementById("d-resp-b").textContent = e.response_body || "(empty body)";
+    state.bodyText.resp = (e.response_body || "") +
+      (respTrunc ? "\n\n⚠ body truncated at " + (e.response_body || "").length + " B (original " + respLen + " B)" : "");
+    renderBodyView("resp");
   }
+  // Note + highlight mirror the row's stored values.
+  document.getElementById("d-note").value = e.note || "";
+  document.getElementById("d-note-state").textContent = "";
+  buildSwatches(document.getElementById("d-note-swatches"), col => {
+    setHighlight(e.id, col);
+    buildSwatches(document.getElementById("d-note-swatches"), c2 => {
+      setHighlight(e.id, c2);
+    }, col);
+  }, e.highlight || "");
+  const hlBtn = document.getElementById("d-hl");
+  if (hlBtn) hlBtn.textContent = e.highlight ? "Highlighted ✓" : "Highlight…";
 }
 async function loadIntruderPane() {
   const el = document.getElementById("d-int");
@@ -821,6 +1650,33 @@ async function loadIntruderPane() {
     ).join("\n");
   } catch (e) { el.textContent = "(failed to load intruder results)"; }
 }
+// ── Highlight / note actions ────────────────────────────────────────
+document.getElementById("d-hl").addEventListener("click", () => {
+  const id = state.selectedId;
+  if (id == null) return;
+  const row = state.rows.find(r => r.id === id);
+  const anchor = document.getElementById("d-hl");
+  const r = anchor.getBoundingClientRect();
+  openRowMenuAt(id, anchor, r);
+});
+document.getElementById("d-note-btn").addEventListener("click", () => {
+  document.querySelector('.dtab[data-pane="p-note"]').click();
+  document.getElementById("d-note").focus();
+});
+document.getElementById("d-note-save").addEventListener("click", async () => {
+  const id = state.selectedId;
+  if (id == null) return;
+  const note = document.getElementById("d-note").value;
+  const ok = await setHighlight(id, undefined, note);
+  document.getElementById("d-note-state").textContent = ok ? "Saved ✓" : "Failed";
+});
+document.getElementById("d-add-intruder").addEventListener("click", () => {
+  const id = state.selectedId;
+  if (id == null) return;
+  document.querySelector('.tab[data-tab="intruder"]').click();
+  applyIntruderRequest(id);
+  toast("Loaded into Intruder");
+});
 document.getElementById("d-curl").addEventListener("click", () => {
   const e = state.rows.find(x => x.id === state.selectedId);
   if (!e) { toast("Select a request first", true); return; }
@@ -880,19 +1736,23 @@ document.addEventListener("keydown", ev => {
 
 // ── log tab ──────────────────────────────────────────────────────────
 async function loadLog() {
-  const { data: logs } = await api("/api/logs");
+  const { data: logs } = await api("/api/logs?" + filtersQ({ limit: 500 }));
   const tb = document.getElementById("logb");
   if (!Array.isArray(logs) || !logs.length) {
-    tb.innerHTML = '<tr><td colspan="5" class="empty-note">Empty</td></tr>';
+    tb.innerHTML = '<tr><td colspan="6" class="empty-note">Empty</td></tr>';
     return;
   }
-  tb.innerHTML = logs.map(l =>
-    '<tr class="log-row" data-id="' + l.id + '">' +
-    "<td>" + l.id + '</td><td class="text-sm text-muted">' + esc((l.timestamp || "").slice(11, 19)) + "</td>" +
-    '<td><span class="method ' + mcl(l.method) + '">' + esc(l.method) + "</span></td>" +
-    '<td class="trunc">' + esc(l.url) + "</td>" +
-    '<td class="status ' + scls(l.response_code) + '">' + codeLabel(l.response_code) + "</td></tr>"
-  ).join("");
+  tb.innerHTML = logs.map(l => {
+    const p = urlParts(l.url);
+    const hl = l.highlight || "";
+    return '<tr class="log-row' + (hl ? " hl-row" : "") + '" data-id="' + l.id + '"' + rowHlStyle(hl) +
+      ' title="' + esc(l.url) + '">' +
+      "<td>" + l.id + '</td><td class="text-sm text-muted">' + esc((l.timestamp || "").slice(11, 19)) + "</td>" +
+      '<td><span class="method ' + mcl(l.method) + '">' + esc(l.method) + "</span></td>" +
+      '<td class="trunc host-cell">' + esc(shortHost(p.host)) + "</td>" +
+      '<td class="trunc">' + esc(p.path || "/") + (p.query ? '<span class="text-muted">?' + esc(p.query) + "</span>" : "") + "</td>" +
+      '<td class="status ' + scls(l.response_code) + '">' + codeLabel(l.response_code) + "</td></tr>";
+  }).join("");
   tb.querySelectorAll("tr.log-row").forEach(tr =>
     tr.addEventListener("click", async () => {
       const { data: e } = await api("/api/logs/" + tr.dataset.id);
@@ -901,36 +1761,29 @@ async function loadLog() {
 }
 document.getElementById("ref-log").addEventListener("click", loadLog);
 
-// ── shared select populator (repeater/intruder tabs) ─────────────────
+// ── shared capture cache (repeater/intruder tabs) ────────────────────
 async function refreshSel() {
-  // Populate the Repeater dropdown from the *same* filters the live table is
-  // using, so picking a request here can never offer one the live view hides.
+  // Warm the cache both tabs pick from, using the *same* filters the live
+  // table is using, so picking a request here can never offer one the live
+  // view hides.
   const { data: logs } = await api("/api/logs?" + filtersQ({ limit: 500 }));
   state.logCache = Array.isArray(logs) ? logs : [];
-  const sel = document.getElementById("rsel");
-  if (sel) {
-    sel.innerHTML = '<option value="">-- Select --</option>';
-    state.logCache.forEach(l => {
-      const o = document.createElement("option");
-      o.value = l.id;
-      o.textContent = "#" + l.id + " " + l.method + " " + String(l.url || "").slice(0, 60);
-      sel.appendChild(o);
-    });
-  }
 }
-function fillFromCache(prefix) {
-  return function () {
-    const e = state.logCache.find(x => x.id == this.value);
-    if (!e) return;
-    document.getElementById(prefix + "met").value = e.method;
-    document.getElementById(prefix + "url").value = e.url || "";
-    document.getElementById(prefix + "hed").value = fmtH(e.headers);
-    document.getElementById(prefix + "bod").value = e.body || "";
-    if (prefix === "r") document.getElementById("rresp").style.display = "none";
-    if (prefix === "i") document.getElementById("ires").style.display = "none";
-  };
+// Load a captured request into the Repeater tab's editor. Shared by the
+// picker modal and the "Repeater" buttons so both paths behave identically.
+function applyRepeaterRequest(id) {
+  const e = pkHits.find(x => x.id === id) || state.logCache.find(x => x.id === id);
+  document.getElementById("rsel").value = e ? e.id : "";
+  document.getElementById("rsel-label").textContent = e
+    ? "#" + e.id + " · " + e.method + " " + String(e.url || "").slice(0, 70)
+    : "No request selected";
+  if (!e) return;
+  document.getElementById("rmet").value = e.method;
+  document.getElementById("rurl").value = e.url || "";
+  document.getElementById("rhed").value = fmtH(e.headers);
+  document.getElementById("rbod").value = e.body || "";
+  document.getElementById("rresp").style.display = "none";
 }
-document.getElementById("rsel").addEventListener("change", fillFromCache("r"));
 
 // ── Intruder request picker modal ─────────────────────────────────────
 // The Intruder used to use a bare <select> that ignored the Live tab filters
@@ -943,6 +1796,8 @@ const pkUse = document.getElementById("pick-use");
 const pkSel = document.getElementById("pick-sel");
 let pkHits = [];
 let pkChosen = null;
+// "intruder" | "repeater" — which editor "Use it" fills.
+let pkTarget = "intruder";
 
 function pkQuery() {
   const p = new URLSearchParams();
@@ -950,10 +1805,17 @@ function pkQuery() {
   const s = document.getElementById("pk-status").value;
   const u = document.getElementById("pk-url").value.trim();
   const i = document.getElementById("pk-id").value.trim();
+  const h = document.getElementById("pk-host").value;
   if (m) p.set("method", m);
   if (s) p.set("status", s);
   if (u) p.set("url", u);
   if (i) p.set("id", i);
+  if (h) p.set("host", h);
+  // Seeded chips (hide-static / highlighted-only) carry through, so the
+  // picker opens on the same view the user is looking at.
+  const v = filterValues();
+  p.set("hide_static", v.hide_static ? "1" : "0");
+  p.set("highlighted_only", v.highlighted_only ? "1" : "0");
   p.set("limit", "300");
   return p.toString();
 }
@@ -965,12 +1827,13 @@ function pkSeed() {
   document.getElementById("pk-status").value = v.status || "";
   document.getElementById("pk-url").value = v.url || "";
   document.getElementById("pk-id").value = v.id || "";
+  document.getElementById("pk-host").value = v.host || "";
 }
 async function pkLoad() {
-  pkRows.innerHTML = '<tr><td colspan="4" class="empty-note">Loading…</td></tr>';
+  pkRows.innerHTML = '<tr><td colspan="5" class="empty-note">Loading…</td></tr>';
   const { data, ok } = await api("/api/logs?" + pkQuery());
   if (!ok || data.error) {
-    pkRows.innerHTML = '<tr><td colspan="4" class="empty-note">' +
+    pkRows.innerHTML = '<tr><td colspan="5" class="empty-note">' +
       esc(data.error || "could not load captures") + "</td></tr>";
     document.getElementById("pick-count").textContent = "";
     return;
@@ -979,16 +1842,19 @@ async function pkLoad() {
   document.getElementById("pick-count").textContent = pkHits.length + " match" +
     (pkHits.length === 1 ? "" : "es");
   if (!pkHits.length) {
-    pkRows.innerHTML = '<tr><td colspan="4" class="empty-note">No captures match these filters.</td></tr>';
+    pkRows.innerHTML = '<tr><td colspan="5" class="empty-note">No captures match these filters.</td></tr>';
     return;
   }
-  pkRows.innerHTML = pkHits.map(r =>
-    '<tr class="log-row" data-id="' + r.id + '">' +
-    "<td>" + r.id + "</td>" +
-    '<td><span class="method ' + mcl(r.method) + '">' + esc(r.method) + "</span></td>" +
-    '<td class="status ' + scls(r.response_code) + '">' + codeLabel(r.response_code) + "</td>" +
-    '<td class="trunc">' + esc(r.url) + "</td></tr>"
-  ).join("");
+  pkRows.innerHTML = pkHits.map(r => {
+    const p = urlParts(r.url);
+    const hl = r.highlight || "";
+    return '<tr class="log-row' + (hl ? " hl-row" : "") + '" data-id="' + r.id + '"' + rowHlStyle(hl) + '>' +
+      "<td>" + r.id + "</td>" +
+      '<td><span class="method ' + mcl(r.method) + '">' + esc(r.method) + "</span></td>" +
+      '<td class="status ' + scls(r.response_code) + '">' + codeLabel(r.response_code) + "</td>" +
+      '<td class="trunc host-cell">' + esc(shortHost(p.host)) + "</td>" +
+      '<td class="trunc">' + esc(p.path || "/") + (p.query ? '<span class="text-muted">?' + esc(p.query) + "</span>" : "") + "</td></tr>";
+  }).join("");
   pkRows.querySelectorAll("tr.log-row").forEach(tr =>
     tr.addEventListener("click", () => pkChoose(parseInt(tr.dataset.id, 10), tr)));
 }
@@ -1001,8 +1867,26 @@ function pkChoose(id, tr) {
 }
 function pkUseIt() {
   if (pkChosen == null) return;
-  applyIntruderRequest(pkChosen);
-  pkModal.classList.remove("open");
+  if (pkTarget === "repeater") applyRepeaterRequest(pkChosen);
+  else applyIntruderRequest(pkChosen);
+  pickModal.classList.remove("open");
+}
+let pkDebounceTimer = null;
+function pkDebounced() {
+  clearTimeout(pkDebounceTimer);
+  pkDebounceTimer = setTimeout(pkLoad, 250);
+}
+// Open the picker for a given consumer ("intruder" / "repeater").
+function openPicker(target) {
+  pkTarget = target;
+  pkChosen = null;
+  pkUse.disabled = true;
+  pkSel.textContent = "Nothing selected";
+  document.getElementById("pick-for").textContent =
+    target === "repeater" ? "→ Repeater" : "→ Intruder";
+  if (document.getElementById("pk-seeded").checked) pkSeed();
+  pickModal.classList.add("open");
+  pkLoad();
 }
 function applyIntruderRequest(id) {
   const e = pkHits.find(x => x.id === id) || state.logCache.find(x => x.id === id);
@@ -1017,21 +1901,20 @@ function applyIntruderRequest(id) {
   document.getElementById("ibod").value = e.body || "";
   document.getElementById("ires").style.display = "none";
 }
-document.getElementById("isel-btn").addEventListener("click", () => {
-  pkChosen = null;
-  pkUse.disabled = true;
-  pkSel.textContent = "Nothing selected";
-  if (document.getElementById("pk-seeded").checked) pkSeed();
-  pickModal.classList.add("open");
-  pkLoad();
-});
+document.getElementById("isel-btn").addEventListener("click", () => openPicker("intruder"));
+document.getElementById("rsel-btn").addEventListener("click", () => openPicker("repeater"));
 document.getElementById("pick-close").addEventListener("click", () => pickModal.classList.remove("open"));
 pkUse.addEventListener("click", pkUseIt);
 document.getElementById("pk-refresh").addEventListener("click", pkLoad);
 pickModal.addEventListener("click", ev => { if (ev.target === pickModal) pickModal.classList.remove("open"); });
-document.addEventListener("keydown", ev => { if (ev.key === "Escape") pickModal.classList.remove("open"); });
-["pk-method", "pk-status"].forEach(id =>
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") { pickModal.classList.remove("open"); closeRowMenu(); }
+});
+["pk-method", "pk-status", "pk-host"].forEach(id =>
   document.getElementById(id).addEventListener("change", pkLoad));
+// Text inputs re-query on a debounce rather than per keystroke.
+["pk-url", "pk-id"].forEach(id =>
+  document.getElementById(id).addEventListener("input", pkDebounced));
 
 // ── repeater tab ─────────────────────────────────────────────────────
 document.getElementById("rsend").addEventListener("click", async () => {
@@ -1235,10 +2118,15 @@ async function loadDevicesDash() {
 loadDevicesDash();
 
 // ── boot ─────────────────────────────────────────────────────────────
+// restoreSession() runs first: it restores the tab, filters and split width,
+// so the first pollLive() already queries with the user's saved filters
+// instead of briefly rendering an unfiltered table.
+restoreSession();
 pollLive();
 setInterval(pollLive, 2000);
+setInterval(refreshHostOptions, 15000);
 refreshProxyBar();
-restoreSession();
+refreshHostOptions();
 </script>
 </body>
 </html>

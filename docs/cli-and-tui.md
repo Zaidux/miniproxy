@@ -11,11 +11,12 @@ miniproxy connect    How to point any browser/device (here or over the internet)
 miniproxy tui        Terminal UI (Textual) — live feed, filters, Repeater
 miniproxy dashboard  Run the web dashboard in the foreground (no proxy)
 miniproxy log        One-shot dump of captured requests
+miniproxy noise      Manage browser-noise rules; scan/clean captured noise
 miniproxy send       One-shot request (Repeater semantics) without the dashboard
 ```
 
-`log`, `send`, and `tui` read the capture DB directly — the dashboard does
-**not** need to be running, and neither does the proxy.
+`log`, `noise`, `send`, and `tui` read the capture DB directly — the dashboard
+does **not** need to be running, and neither does the proxy.
 
 ## start
 
@@ -139,6 +140,35 @@ miniproxy log --id 42        # full detail for one request
 
 Table output includes method, status, and total ms — handy for quick
 sanity checks over SSH or in scripts.
+
+## noise
+
+Manage browser telemetry/ad rules and clean noise already captured. Works
+without the dashboard running — the point is being able to quiet a noisy
+capture over SSH.
+
+```bash
+miniproxy noise list      # rules and enabled/disabled state
+miniproxy noise enable    # enable every rule (the one-click opt-in)
+miniproxy noise add '*.telemetry.example.com'
+miniproxy noise disable youtube.com   # just this one
+miniproxy noise rm youtube.com
+
+miniproxy noise scan      # dry run: what would go, by host
+miniproxy noise clean     # prints the numbers, refuses without --yes
+miniproxy noise clean --yes --keep-host target.example
+```
+
+Enabled rules make matched hosts skip the capture **entirely** — the traffic
+is still proxied, it just never reaches the DB. The bundled list of known
+telemetry/ad hosts ships disabled; `noise enable` turns it on.
+
+`clean` always writes a timestamped `.noise-backup-<date>.db` snapshot first
+(via SQLite's backup API, so it is never a torn copy) and reports its path.
+`--keep-host` is repeatable and protects hosts you care about.
+
+See [web-ui → Noise](web-ui.md#noise--the-browser-noise-problem) for the
+three-layer model and the matching dashboard controls.
 
 ## send
 

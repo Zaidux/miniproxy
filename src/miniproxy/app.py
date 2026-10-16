@@ -26,7 +26,7 @@ from flask import (
 
 from miniproxy import connect as connect_helpers
 from miniproxy import server as proxy_server
-from miniproxy.addon.db import Database
+from miniproxy.addon.db import HIGHLIGHT_COLORS, Database
 from miniproxy.intruder import Intruder
 
 app = Flask(__name__)
@@ -372,13 +372,22 @@ def proxy_toggle():
 
 # ── Log API ────────────────────────────────────────────────────────────
 
+def _truthy(value: str | None) -> bool:
+    """Query-string truthiness: 1/true/yes/on (case-insensitive)."""
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _log_filters(**overrides: Any) -> dict[str, Any]:
     """Read the shared capture filters off the query string.
 
-    Every filter-consuming endpoint goes through here (listing, count and all
-    exports) so the Live tab, the Intruder picker and the export menu can
-    never drift apart.  ``id`` is the shared id selector — ``42``, ``1,5,9``,
-    ``100-200``, or any comma/space separated mix.
+    Every filter-consuming endpoint goes through here (listing, count, the
+    hosts rollup and all exports) so the Live tab, the request picker and the
+    export menu can never drift apart.  ``id`` is the shared id selector —
+    ``42``, ``1,5,9``, ``100-200``, or any comma/space separated mix.
+
+    ``host`` narrows to one target, ``exclude_host`` removes one, and
+    ``hide_static`` drops images/fonts/css/js/media — together these are the
+    dashboard-side answer to browser noise on an already-captured DB.
     """
     args = flask_request.args
     filters: dict[str, Any] = {
@@ -386,6 +395,10 @@ def _log_filters(**overrides: Any) -> dict[str, Any]:
         "status_class": args.get("status", "").strip(),
         "url_substr": args.get("url", "").strip(),
         "ids": args.get("id", "").strip(),
+        "host": args.get("host", "").strip(),
+        "exclude_host": args.get("exclude_host", "").strip(),
+        "hide_static": _truthy(args.get("hide_static")),
+        "highlighted_only": _truthy(args.get("highlighted_only")),
     }
     filters.update(overrides)
     return filters
@@ -422,6 +435,114 @@ def get_log_detail(req_id):
     if entry is None:
         return jsonify({"error": "not found"}), 404
     return jsonify(entry)
+
+
+@app.route("/api/logs/<int:req_id>", methods=["PATCH"])
+def annotate_log(req_id):
+    """Set a capture's highlight color and/or note.
+
+    Only the keys present in the body are touched, so a note edit never clears
+    the highlight (and vice versa). Colors are validated against the palette:
+    the value is rendered into a style attribute, so free-form CSS here would
+    be a stored-XSS hole.
+    """
+    data = flask_request.get_json(silent=True) or {}
+    highlight = data["highlight"] if "highlight" in data else None
+    note = data["note"] if "note" in data else None
+    try:
+        ok = db.annotate(req_id, highlight=highlight, note=note)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not ok:
+        return jsonify({"error": "not found"}), 404
+    row = db.get_request(req_id)
+    return jsonify({"id": req_id, "highlight": row.get("highlight"),
+                    "note": row.get("note") or ""})
+
+
+@app.route("/api/hosts")
+def list_hosts():
+    """Distinct hosts with capture counts, busiest first.
+
+    Drives the focus-host picker and the 'N hidden as noise' badge: it is the
+    cheapest way to see at a glance which host is eating the capture DB.
+    """
+    return jsonify({
+        "hosts": db.list_hosts(limit=flask_request.args.get("limit", 200, type=int)),
+    })
+
+
+# ── Noise API ──────────────────────────────────────────────────────────
+
+@app.route("/api/noise/rules", methods=["GET", "POST"])
+def noise_rules():
+    """List or add noise rules (hosts whose traffic should never be captured).
+
+    POST ``{"value": "ads.example.com", "kind": "host", "enabled": true}``.
+    POST with ``{"enable_builtin": true}`` flips the whole seeded telemetry
+    list at once — the one-click opt-in for the browser-noise problem.
+    """
+    if flask_request.method == "POST":
+        data = flask_request.get_json(silent=True) or {}
+        if "enable_builtin" in data:
+            changed = db.enable_all_noise_rules(bool(data["enable_builtin"]))
+            return jsonify({"ok": True, "rules": db.list_noise_rules(),
+                            "changed": changed})
+        value = data.get("value", "")
+        kind = data.get("kind", "host")
+        enabled = data.get("enabled", True)
+        try:
+            rule_id = db.add_noise_rule(value, kind, bool(enabled))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "id": rule_id,
+                        "rules": db.list_noise_rules()}), 201
+    return jsonify({"rules": db.list_noise_rules(),
+                    "palette": list(HIGHLIGHT_COLORS)})
+
+
+@app.route("/api/noise/rules/<int:rule_id>", methods=["PATCH", "DELETE"])
+def noise_rule(rule_id):
+    """Enable/disable one rule, or delete it."""
+    if flask_request.method == "DELETE":
+        if not db.delete_noise_rule(rule_id):
+            return jsonify({"error": "no such rule"}), 404
+        return jsonify({"ok": True, "rules": db.list_noise_rules()})
+    data = flask_request.get_json(silent=True) or {}
+    ok = db.set_noise_rule_enabled(rule_id, bool(data.get("enabled", True)))
+    if not ok:
+        return jsonify({"error": "no such rule"}), 404
+    return jsonify({"ok": True, "rules": db.list_noise_rules()})
+
+
+@app.route("/api/noise/scan")
+def noise_scan():
+    """Dry run: what a cleanup would remove, and why. Never deletes."""
+    return jsonify(db.scan_noise())
+
+
+@app.route("/api/noise/clean", methods=["POST"])
+def noise_clean():
+    """Bulk-delete captures matching the enabled rules (and static assets).
+
+    Refuses without ``{"confirm": true}`` so a stray POST can't wipe a
+    session, and takes a ``.noise-backup-*.db`` snapshot first — the
+    response returns that path so it can be restored from.
+    """
+    data = flask_request.get_json(silent=True) or {}
+    if not data.get("confirm"):
+        preview = db.scan_noise()
+        return jsonify({
+            "error": "confirmation required",
+            "matched": preview["matched"],
+            "keep": preview["keep"],
+            "by_host": preview["by_host"],
+        }), 400
+    keep = data.get("keep_hosts") or []
+    if not isinstance(keep, list):
+        return jsonify({"error": "keep_hosts must be a list"}), 400
+    result = db.clean_noise(keep_hosts=[str(h) for h in keep])
+    return jsonify({"ok": True, **result})
 
 
 # ── Meta API ───────────────────────────────────────────────────────────
@@ -553,7 +674,10 @@ def export_har():
     try:
         rows = db.get_logs(limit=f["limit"], since_id=f["since"],
                            method=f["method"], status_class=f["status"],
-                           url_substr=f["url"], ids=f["ids"])
+                           url_substr=f["url"], ids=f["ids"],
+                           host=f["host"], exclude_host=f["exclude_host"],
+                           hide_static=f["hide_static"],
+                           highlighted_only=f["highlighted_only"])
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:  # corrupted DB / IO error
@@ -584,7 +708,10 @@ def export_json():
     try:
         rows = db.get_logs(limit=f["limit"], since_id=f["since"],
                            method=f["method"], status_class=f["status"],
-                           url_substr=f["url"], ids=f["ids"])
+                           url_substr=f["url"], ids=f["ids"],
+                           host=f["host"], exclude_host=f["exclude_host"],
+                           hide_static=f["hide_static"],
+                           highlighted_only=f["highlighted_only"])
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -810,6 +937,10 @@ def _export_filters() -> dict:
         "status": args.get("status", "").strip(),
         "url": args.get("url", "").strip(),
         "ids": args.get("id", "").strip(),
+        "host": args.get("host", "").strip(),
+        "exclude_host": args.get("exclude_host", "").strip(),
+        "hide_static": _truthy(args.get("hide_static")),
+        "highlighted_only": _truthy(args.get("highlighted_only")),
     }
 
 
