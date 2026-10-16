@@ -12,6 +12,36 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-16
+
+Diff, Noise and Rewrite are top-level tabs.
+
+### Changed
+
+- **The three former modals are now tabs.** `Diff`, `Noise` and `Rewrite` sit
+  in the top tab bar next to Live/Log/Repeater/Intruder/Connect, so they are
+  directly reachable instead of hiding behind a button. Each gets the full
+  page width and scrolls internally rather than pushing the page into a
+  double scrollbar.
+- Every existing entry point now navigates to the tab rather than opening an
+  overlay — one implementation of each screen, no second copy to drift:
+  - **⋮ → Compare** (new) and the detail pane's **Compare…** hand the capture
+    to the Diff tab as **A**, leaving you to pick B there.
+  - The Repeater's **Compare…** does the same.
+  - The filter bar's **Noise…** and **Rewrite…** switch to their tabs and load
+    the current state on entry.
+- The Diff tab's own **Pick…** buttons open the shared capture picker with the
+  header reading `→ Capture A` / `→ Capture B`, so it is clear which side you
+  are filling.
+- The tab bar wraps, which it needs to: eight entries overflow a 412px phone
+  viewport otherwise. The active tab is still restored on reload.
+
+### Fixed
+
+- The Diff tab's **Pick…** buttons passed the short target `a`/`b` to the
+  picker, which only recognises `diff-a`/`diff-b` — so they fell through to
+  the Intruder and filled the wrong editor.
+
 ## [0.7.0] — 2026-10-16
 
 Eight features, plus the two interaction bugs they exposed.
@@ -415,7 +445,8 @@ See the git history (<https://github.com/Zaidux/miniproxy/commits/main>) —
 the pre-0.4 releases were the Riciplay-bundled variant without a standalone
 changelog.
 
-[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Zaidux/miniproxy/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.8.0
 [0.7.0]: https://github.com/Zaidux/miniproxy/releases/tag/v0.7.0
 [0.6.3]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.3
 [0.6.1]: https://github.com/Zaidux/miniproxy/releases/tag/v0.6.1

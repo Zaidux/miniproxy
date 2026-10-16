@@ -43,6 +43,32 @@ Already running a proxy without the dashboard? Start it alone:
 miniproxy dashboard --port 5000        # foreground
 ```
 
+## Tabs
+
+The dashboard is organised as tabs across the top:
+
+| Tab | What it is |
+|-----|------------|
+| **Live** | the capture feed + detail pane — where you spend most of your time |
+| **Log** | the full request history |
+| **Repeater** | edit and resend, with tabs and send history |
+| **Intruder** | `§param§` fuzzing, single-list or pitchfork |
+| **Diff** | compare two captures and read off what changed |
+| **Noise** | which hosts are skipped at capture time, and cleanup |
+| **Rewrite** | match & replace applied to live traffic |
+| **Connect** | route any browser/device through the proxy |
+
+The active tab is remembered across a refresh.
+
+**Diff**, **Noise** and **Rewrite** are also reachable from where you need
+them — and those entry points *navigate to the tab* rather than opening an
+overlay, so there is only ever one copy of each screen:
+
+- **⋮ → Compare** on any row, or **Compare…** in the detail pane, hands the
+  capture to the Diff tab as **A**.
+- **Compare…** in the Repeater does the same.
+- **Noise…** and **Rewrite…** in the filter bar switch to their tabs.
+
 ## Header bar
 
 - **proxy state** — green dot + port when the capture proxy is running,
@@ -156,8 +182,9 @@ Action buttons under the tabs:
 
 The access-control workflow. Send the same request twice with one parameter
 changed, then ask *what actually changed* instead of reading two hex dumps.
-Open it with **Compare…** in the detail pane, **Compare…** in the Repeater, or
-**⋮ → Compare**.
+Open it from the **Diff** tab directly, or hand it a capture with **Compare…**
+in the detail pane, **Compare…** in the Repeater, or **⋮ → Compare** — those
+take you to the tab with A already set.
 
 Pick **A** and **B** (each via the normal capture picker), and the header names
 the difference — for example `role: 'user' → 'admin'`. Six views:
@@ -240,7 +267,7 @@ hop's status.
 
 ### Match & replace
 
-The **Rewrite…** button opens the match-and-replace rules. These apply to
+The **Rewrite** tab holds the match-and-replace rules. These apply to
 requests **as they pass through the proxy**, before they reach the server — so
 the target sees the modified values. Use it to force a header on every request
 instead of repeating it by hand in the Repeater forty times.
@@ -287,7 +314,7 @@ DoubleClick, Google Analytics, scorecards…) ships **disabled** — a host list
 is a policy decision, not a fact about the target, so nothing is dropped
 until you opt in.
 
-Either the **Noise…** button in the dashboard, or the CLI:
+Either the **Noise** tab in the dashboard, or the CLI:
 
 ```bash
 miniproxy noise list                 # rules and their state
@@ -324,7 +351,7 @@ miniproxy noise clean    # refuses without --yes, and tells you the numbers
 miniproxy noise clean --yes --keep-host target.example
 ```
 
-Or **Noise… → Scan (dry run) → Delete noise captures…** in the dashboard.
+Or **Noise → Scan (dry run) → Delete noise captures…** in the dashboard.
 Both paths:
 
 - **refuse to delete without explicit confirmation**

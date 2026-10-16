@@ -151,7 +151,7 @@ Tools that ignore proxy env vars can usually be pointed explicitly (`curl -x`, `
 - **Compare captures** — diff two requests the way Burp's Compare does. Added a parameter and want to know what changed? The summary names it: `role: 'user' → 'admin'`.
 - **Body search** — full-text over request *and* response bodies, where flags and leaked tokens actually live.
 - **Host focus + Hide static** — one tap to narrow to your target, or drop images/fonts/css/js.
-- **Noise control** — see below.
+- **Tabbed everything** — Live / Log / Repeater / Intruder / **Diff** / **Noise** / **Rewrite** / Connect. Compare, noise rules and match & replace are top-level tabs, and the ⋮ menu or detail pane hands a capture straight to the right tab.
 
 ### Testing tools
 
@@ -239,10 +239,10 @@ src/miniproxy/
 ```bash
 git clone https://github.com/Zaidux/miniproxy && cd miniproxy
 pip install -e ".[dev]"
-pytest                     # 390+ tests: db, devices, API, exports, intruder,
+pytest                     # 400+ tests: db, devices, API, exports, intruder,
                           # process mgr, TUI, connect, noise, JS/Python parity,
                           # dashboard XSS, live mitmdump capture, diff,
-                          # body search, pitchfork, selection safety
+                          # body search, pitchfork, selection safety, tabs
 ```
 
 CI runs the suite on Linux/macOS (Python 3.10/3.12) for every push and PR,

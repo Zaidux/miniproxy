@@ -122,11 +122,14 @@ def check(res, name, cond, extra=""):
 
 # ── Diff ────────────────────────────────────────────────────────────
 
-def test_diff_modal_identifies_the_role_change(page, dash):
+def test_diff_tab_identifies_the_role_change(page, dash):
     a, b = dash["ids"][0], dash["ids"][1]
     page.evaluate(f"openDiff({a}, {b})")
     page.wait_for_timeout(900)
-    check([], "diff modal opens", page.is_visible("#diff-modal"), "")
+    check([], "diff tab is shown", page.is_visible("#t-diff"), "")
+    check([], "diff tab button is active",
+          "active" in (page.get_attribute('.tab[data-tab="diff"]', "class") or ""),
+          page.get_attribute('.tab[data-tab="diff"]', "class"))
     summary = page.inner_text("#diff-summary")
     check([], "summary names the role field", "role" in summary, summary)
     check([], "summary shows the value transition", "user" in summary and "admin" in summary, summary)
@@ -286,10 +289,12 @@ def test_repeater_history_records_sends(dash):
 
 # ── Rewrite modal ───────────────────────────────────────────────────
 
-def test_rewrite_modal_lists_and_adds(page):
+def test_rewrite_tab_lists_and_adds(page):
     page.click("#rw-btn")
     page.wait_for_timeout(800)
-    check([], "rewrite modal opens", page.is_visible("#rewrite-modal"))
+    check([], "rewrite tab is shown", page.is_visible("#t-rewrite"))
+    check([], "rewrite tab button is active",
+          "active" in (page.get_attribute('.tab[data-tab="rewrite"]', "class") or ""))
     check([], "starts with no rules", "No rules" in page.inner_text("#rw-rules"))
     page.select_option("#rw-target", "header")
     page.select_option("#rw-kind", "exact")

@@ -18,7 +18,7 @@ button{font:inherit}
 .idot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
 .idot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
 .db-label{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
-.tabs{display:flex;margin-left:auto;gap:4px}
+.tabs{display:flex;margin-left:auto;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .tab{padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;font-weight:500}
 .tab:hover{background:var(--border);color:var(--text)}
 .tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -204,8 +204,15 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
 .rule-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace}
 .rule-row.builtin .grow{color:var(--muted)}
 
+/* ── Tab layout helpers ─────────────────────────────────────────── */
+/* A tab body that fills the remaining viewport and scrolls internally, so a
+   long rule list or diff does not push the page into a double scrollbar. */
+.tabfill{display:flex;flex-direction:column;gap:8px;height:calc(100vh - 210px);overflow:hidden}
+.tabscroll{flex:1;overflow:auto;min-height:0}
+.diff-pick-actions{display:flex;align-items:center;gap:8px;flex:none}
+
 /* ── Diff viewer ─────────────────────────────────────────────────── */
-.diff-picks{display:flex;gap:10px;flex-wrap:wrap}
+.diff-picks{display:flex;gap:10px;flex-wrap:wrap;flex:none}
 .diff-pick{flex:1;min-width:220px;display:flex;align-items:center;gap:8px;
   background:var(--code);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px}
 .diff-pick b{color:var(--accent)}
@@ -306,6 +313,9 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
     <button class="tab" data-tab="log">Log</button>
     <button class="tab" data-tab="repeater">Repeater</button>
     <button class="tab" data-tab="intruder">Intruder</button>
+    <button class="tab" data-tab="diff" title="Compare two captures — what changed between them">Diff</button>
+    <button class="tab" data-tab="noise" title="Skip telemetry/ad hosts at capture time; clean captured noise">Noise</button>
+    <button class="tab" data-tab="rewrite" title="Match &amp; replace headers/params on live traffic">Rewrite</button>
     <button class="tab" data-tab="connect">Connect</button>
   </div>
   <div class="export-wrap">
@@ -578,6 +588,107 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
   </div>
 </div>
 
+<!-- ══════════ Diff tab — compare two captures ══════════ -->
+<!-- The access-control workflow: send the same request twice with one
+     parameter changed, then ask what actually changed. This is a tab rather
+     than a modal so the diff gets the full page width, and so the ⋮ / detail
+     / repeater entry points can hand off to it with A or B already set. -->
+<div class="tab-content" id="t-diff">
+  <div class="card">
+    <div class="card-header">
+      Compare captures
+      <span class="ml-auto text-sm" id="diff-summary"></span>
+    </div>
+    <div class="card-body tabfill">
+      <div class="diff-picks" id="diff-picks">
+        <div class="diff-pick"><b>A</b> <span id="diff-a">—</span>
+          <button class="btn btn-sm" data-pick="a">Pick…</button></div>
+        <div class="diff-pick"><b>B</b> <span id="diff-b">—</span>
+          <button class="btn btn-sm" data-pick="b">Pick…</button></div>
+        <div class="diff-pick-actions">
+          <span class="text-sm text-muted" id="diff-pair"></span>
+          <button class="btn btn-sm" id="diff-swap" title="Swap A and B">⇄ Swap</button>
+        </div>
+      </div>
+      <div class="btabs" id="diff-tabs">
+        <button class="btab active" data-dpane="fields">What changed</button>
+        <button class="btab" data-dpane="json">JSON</button>
+        <button class="btab" data-dpane="token">Tokens</button>
+        <button class="btab" data-dpane="char">Bytes</button>
+        <button class="btab" data-dpane="params">Params</button>
+        <button class="btab" data-dpane="headers">Headers</button>
+      </div>
+      <div id="diff-body" class="tabscroll"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ Noise tab — capture-time rules + cleanup ══════════ -->
+<div class="tab-content" id="t-noise">
+  <div class="card">
+    <div class="card-header">
+      Noise filter
+      <span class="ml-auto text-sm text-muted" id="noise-count"></span>
+    </div>
+    <div class="card-body tabfill">
+      <div class="hint" style="margin:0 0 10px">
+        Browser traffic drowns out the target. Enabled rules are dropped at
+        <b>capture time</b>, so they never enter the DB. Static assets (images,
+        fonts, css, js, media) are always eligible — the bundled list covers
+        common telemetry and ad hosts and ships <b>disabled</b>.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <input id="noise-add" placeholder="Host to ignore, e.g. *.telemetry.example.com" style="flex:1;min-width:200px">
+        <button class="btn btn-sm btn-primary" id="noise-add-btn">Add</button>
+        <button class="btn btn-sm" id="noise-builtin">Enable bundled list</button>
+      </div>
+      <div id="noise-rules" class="tabscroll" style="min-height:140px"></div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-sm" id="noise-scan-btn">Scan (dry run)</button>
+        <button class="btn btn-sm btn-danger" id="noise-clean-btn" disabled>Delete noise captures…</button>
+        <span class="text-sm text-muted" id="noise-out"></span>
+      </div>
+      <div id="noise-preview" style="max-height:190px;overflow:auto;margin-top:8px"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ Rewrite tab — match & replace on live traffic ══════════ -->
+<div class="tab-content" id="t-rewrite">
+  <div class="card">
+    <div class="card-header">
+      Match &amp; replace
+      <span class="ml-auto text-sm text-muted" id="rewrite-count"></span>
+    </div>
+    <div class="card-body tabfill">
+      <div class="hint" style="margin:0 0 10px">
+        Rules are applied to requests <b>as they pass through the proxy</b>,
+        before they reach the server — so the target sees the modified values.
+        For headers, <b>Exact</b> matches the header <i>name</i> and sets its
+        value; <b>Contains</b> and <b>Regex</b> match inside the value.
+      </div>
+      <div class="rw-grid">
+        <select id="rw-target">
+          <option value="header">Header</option>
+          <option value="query">Query / URL</option>
+          <option value="body">Body</option>
+        </select>
+        <select id="rw-kind">
+          <option value="exact">Exact</option>
+          <option value="contains">Contains</option>
+          <option value="regex">Regex</option>
+        </select>
+        <input id="rw-match" placeholder="match (name or substring)">
+        <input id="rw-replace" placeholder="replace with">
+        <button class="btn btn-sm btn-primary" id="rw-add">Add</button>
+      </div>
+      <div id="rw-rules" class="tabscroll" style="min-height:120px"></div>
+      <div class="hint" id="rw-hint" style="margin-top:6px"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════ Connect tab — route any browser/device through MiniProxy ══════════ -->
 <div class="tab-content" id="t-connect">
   <div class="connect-grid">
@@ -719,113 +830,10 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
     <button class="btn btn-sm" id="row-pop-note">Add note…</button>
     <button class="btn btn-sm" id="row-pop-rep">Repeater</button>
     <button class="btn btn-sm" id="row-pop-int">To Intruder</button>
+    <button class="btn btn-sm" id="row-pop-diff" title="Mark this capture as A, then pick a B to compare">Compare</button>
   </div>
   <div class="pop-note">Highlights and notes are saved with the capture and survive
     restarts. Filter by them with the <b>Highlighted</b> chip above.</div>
-</div>
-
-<!-- ══════════ Diff modal (compare two captures) ══════════ -->
-<!-- The access-control workflow: send the same request twice with one
-     parameter changed, then ask what actually changed. -->
-<div class="modal-backdrop" id="diff-modal">
-  <div class="modal" style="width:min(1180px,96vw);height:min(840px,94vh)">
-    <div class="modal-header">
-      <span>Compare captures</span>
-      <span class="text-sm" id="diff-summary"></span>
-      <div class="ml-auto" style="display:flex;gap:8px;align-items:center">
-        <span class="text-sm text-muted" id="diff-pair"></span>
-        <button class="btn btn-sm" id="diff-swap" title="Swap A and B">⇄</button>
-        <button class="btn btn-sm" id="diff-close">Close (Esc)</button>
-      </div>
-    </div>
-    <div class="modal-body" style="gap:8px">
-      <div id="diff-picks" class="diff-picks">
-        <div class="diff-pick"><b>A</b> <span id="diff-a">—</span>
-          <button class="btn btn-sm" data-pick="a">Pick…</button></div>
-        <div class="diff-pick"><b>B</b> <span id="diff-b">—</span>
-          <button class="btn btn-sm" data-pick="b">Pick…</button></div>
-      </div>
-      <div class="btabs" id="diff-tabs">
-        <button class="btab active" data-dpane="fields">What changed</button>
-        <button class="btab" data-dpane="json">JSON</button>
-        <button class="btab" data-dpane="token">Tokens</button>
-        <button class="btab" data-dpane="char">Bytes</button>
-        <button class="btab" data-dpane="params">Params</button>
-        <button class="btab" data-dpane="headers">Headers</button>
-      </div>
-      <div class="card-body" id="diff-body" style="flex:1;overflow:auto;padding:0"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ══════════ Rewrite (match & replace) modal ══════════ -->
-<div class="modal-backdrop" id="rewrite-modal">
-  <div class="modal" style="width:min(820px,94vw)">
-    <div class="modal-header">
-      <span>Match &amp; replace</span>
-      <span class="text-sm text-muted" id="rewrite-count"></span>
-      <div class="ml-auto"><button class="btn btn-sm" id="rewrite-close">Close (Esc)</button></div>
-    </div>
-    <div class="modal-body">
-      <div class="hint" style="margin:0 0 10px">
-        Rules are applied to requests <b>as they pass through the proxy</b>,
-        before they reach the server — so the target sees the modified values.
-        For headers, <b>Exact</b> matches the header <i>name</i> and sets its
-        value; <b>Contains</b> and <b>Regex</b> match inside the value.
-      </div>
-      <div class="rw-grid">
-        <select id="rw-target">
-          <option value="header">Header</option>
-          <option value="query">Query / URL</option>
-          <option value="body">Body</option>
-        </select>
-        <select id="rw-kind">
-          <option value="exact">Exact</option>
-          <option value="contains">Contains</option>
-          <option value="regex">Regex</option>
-        </select>
-        <input id="rw-match" placeholder="match (name or substring)">
-        <input id="rw-replace" placeholder="replace with">
-        <button class="btn btn-sm btn-primary" id="rw-add">Add</button>
-      </div>
-      <div id="rw-rules" style="flex:1;min-height:120px;overflow:auto"></div>
-      <div class="hint" id="rw-hint" style="margin-top:6px"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ══════════ Noise modal (rules, dry-run scan, cleanup) ══════════ -->
-<div class="modal-backdrop" id="noise-modal">
-  <div class="modal" style="width:min(760px,94vw)">
-    <div class="modal-header">
-      <span>Noise filter</span>
-      <span class="text-sm text-muted" id="noise-count"></span>
-      <div class="ml-auto">
-        <button class="btn btn-sm" id="noise-close">Close (Esc)</button>
-      </div>
-    </div>
-    <div class="modal-body">
-      <div class="hint" style="margin:0 0 10px">
-        Browser traffic drowns out the target. Enabled rules are dropped at
-        <b>capture time</b>, so they never enter the DB. Static assets (images,
-        fonts, css, js, media) are always eligible — the bundled list covers
-        common telemetry and ad hosts and ships <b>disabled</b>.
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-        <input id="noise-add" placeholder="Host to ignore, e.g. *.telemetry.example.com" style="flex:1;min-width:200px">
-        <button class="btn btn-sm btn-primary" id="noise-add-btn">Add</button>
-        <button class="btn btn-sm" id="noise-builtin">Enable bundled list</button>
-      </div>
-      <div id="noise-rules" style="flex:1;min-height:140px;overflow:auto"></div>
-      <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button class="btn btn-sm" id="noise-scan-btn">Scan (dry run)</button>
-        <button class="btn btn-sm btn-danger" id="noise-clean-btn" disabled>Delete noise captures…</button>
-        <span class="text-sm text-muted" id="noise-out"></span>
-      </div>
-      <div id="noise-preview" style="max-height:190px;overflow:auto;margin-top:8px"></div>
-    </div>
-  </div>
 </div>
 
 <!-- ══════════ Repeater modal (opened from the Live detail pane) ══════════ -->
@@ -1041,9 +1049,23 @@ document.querySelectorAll(".tab").forEach(tab => {
       refreshSel();
       if (tab.dataset.tab === "intruder" && iState.mode === "pitchfork") renderPitchRows();
     }
+    // The three former modals are real tabs now; load their data on entry so
+    // switching to them is never an empty page.
+    if (tab.dataset.tab === "noise") { loadNoiseRules(); runNoiseScan(); }
+    if (tab.dataset.tab === "rewrite") loadRewriteRules();
     if (tab.dataset.tab === "connect") loadConnect();
   });
 });
+
+// Navigate to a top-level tab by name. Used by the entry points that used to
+// open a modal (⋮ → Compare, the detail pane, the filter-bar buttons), so
+// there is exactly one implementation of each screen.
+function switchTab(name) {
+  const btn = document.querySelector('.tab[data-tab="' + name + '"]');
+  if (!btn) return false;
+  btn.click();
+  return true;
+}
 
 // ── detail tabs ──────────────────────────────────────────────────────
 document.querySelectorAll(".dtab").forEach(btn => {
@@ -1446,7 +1468,6 @@ function updateNoiseSummary(hosts) {
 function refreshNoiseSummary() { updateNoiseSummary(); }
 
 // ── Noise modal ─────────────────────────────────────────────────────
-const noiseModal = document.getElementById("noise-modal");
 let noisePreview = null;
 function renderNoiseRules(rules) {
   const box = document.getElementById("noise-rules");
@@ -1480,20 +1501,18 @@ async function loadNoiseRules() {
   if (data && data.rules) renderNoiseRules(data.rules);
 }
 document.getElementById("rw-btn").addEventListener("click", async () => {
-  rewriteModal.classList.add("open");
   document.getElementById("rw-hint").textContent = "";
+  switchTab("rewrite");
   await loadRewriteRules();
 });
 document.getElementById("noise-btn").addEventListener("click", async () => {
-  noiseModal.classList.add("open");
   document.getElementById("noise-preview").innerHTML = "";
   document.getElementById("noise-out").textContent = "";
   document.getElementById("noise-clean-btn").disabled = true;
+  switchTab("noise");
   await loadNoiseRules();
   await runNoiseScan();
 });
-document.getElementById("noise-close").addEventListener("click", () => noiseModal.classList.remove("open"));
-noiseModal.addEventListener("click", ev => { if (ev.target === noiseModal) noiseModal.classList.remove("open"); });
 document.getElementById("noise-add-btn").addEventListener("click", async () => {
   const input = document.getElementById("noise-add");
   const v = input.value.trim();
@@ -1690,6 +1709,13 @@ document.getElementById("row-pop-rep").addEventListener("click", () => {
   if (id == null) return;
   selectRow(id);
   openRepModal(state.rows.find(r => r.id === id));
+});
+document.getElementById("row-pop-diff").addEventListener("click", () => {
+  const id = rowPopId;
+  closeRowMenu();
+  if (id == null) return;
+  // Hand off to the Diff tab with this capture as A; the user picks B there.
+  openDiff(id, diffB && diffB !== id ? diffB : null);
 });
 document.getElementById("row-pop-int").addEventListener("click", () => {
   const id = rowPopId;
@@ -2198,8 +2224,8 @@ function pkChoose(id, tr) {
 function pkUseIt() {
   if (pkChosen == null) return;
   if (pkTarget === "repeater") applyRepeaterRequest(pkChosen);
-  else if (pkTarget === "diff-a") { diffA = pkChosen; diffModal.classList.add("open"); renderDiffPickers(); if (diffB) runDiff(); }
-  else if (pkTarget === "diff-b") { diffB = pkChosen; diffModal.classList.add("open"); renderDiffPickers(); if (diffA && diffA !== diffB) runDiff(); }
+  else if (pkTarget === "diff-a") { diffA = pkChosen; switchTab("diff"); renderDiffPickers(); if (diffB) runDiff(); }
+  else if (pkTarget === "diff-b") { diffB = pkChosen; switchTab("diff"); renderDiffPickers(); if (diffA && diffA !== diffB) runDiff(); }
   else applyIntruderRequest(pkChosen);
   pickModal.classList.remove("open");
 }
@@ -2244,8 +2270,6 @@ document.addEventListener("keydown", ev => {
   if (ev.key === "Escape") {
     pickModal.classList.remove("open");
     closeRowMenu();
-    diffModal.classList.remove("open");
-    rewriteModal.classList.remove("open");
   }
 });
 ["pk-method", "pk-status", "pk-host"].forEach(id =>
@@ -2568,7 +2592,6 @@ document.getElementById("clear-btn").addEventListener("click", async () => {
 // The access-control workflow: compare two captures and read off what the
 // changed parameter actually did. Reachable from the detail pane, the repeater
 // and the ⋮ menu.
-const diffModal = document.getElementById("diff-modal");
 let diffA = null, diffB = null, diffResult = null, diffBodies = null;
 const diffMode = "auto";
 let diffPane = "fields";
@@ -2579,10 +2602,11 @@ function openDiff(aId, bId) {
   diffBodies = null;
   diffResult = null;
   renderDiffPickers();
-  diffModal.classList.add("open");
+  switchTab("diff");
   if (aId && bId && aId !== bId) runDiff();
   else document.getElementById("diff-body").innerHTML =
-    '<div class="empty-note">Pick two different captures to compare.</div>';
+    '<div class="empty-note">Pick two different captures to compare — ' +
+    'use <b>Pick…</b> on A and B, or the <b>⋮</b> menu on a captured row.</div>';
 }
 function renderDiffPickers() {
   const row = id => {
@@ -2699,17 +2723,15 @@ document.getElementById("diff-tabs").addEventListener("click", ev => {
   diffPane = t.dataset.dpane;
   renderDiffPane();
 });
+// data-pick holds "a"/"b"; openPicker expects the full target name.
 document.querySelectorAll("[data-pick]").forEach(b =>
-  b.addEventListener("click", () => openPicker(b.dataset.pick)));
+  b.addEventListener("click", () => openPicker("diff-" + b.dataset.pick)));
 document.getElementById("diff-swap").addEventListener("click", () => {
   const t = diffA; diffA = diffB; diffB = t;
   renderDiffPickers();
   if (diffA && diffB && diffA !== diffB) runDiff();
 });
-document.getElementById("diff-close").addEventListener("click", () => diffModal.classList.remove("open"));
-diffModal.addEventListener("click", ev => {
-  if (ev.target === diffModal) diffModal.classList.remove("open");
-});
+
 
 // ── Repeater tabs + per-tab history ─────────────────────────────────
 // Tabs are server-side rows, so a refresh — or opening the dashboard on your
@@ -2839,7 +2861,6 @@ function scheduleRepSave() {
 });
 
 // ── Match & replace ─────────────────────────────────────────────────
-const rewriteModal = document.getElementById("rewrite-modal");
 function renderRewriteRules(rules) {
   const box = document.getElementById("rw-rules");
   const on = rules.filter(r => r.enabled).length;
@@ -2887,10 +2908,7 @@ document.getElementById("rw-add").addEventListener("click", async () => {
 document.getElementById("rw-match").addEventListener("keydown", ev => {
   if (ev.key === "Enter") document.getElementById("rw-add").click();
 });
-document.getElementById("rewrite-close").addEventListener("click", () => rewriteModal.classList.remove("open"));
-rewriteModal.addEventListener("click", ev => {
-  if (ev.target === rewriteModal) rewriteModal.classList.remove("open");
-});
+
 
 // ── connect tab (route any browser/device through MiniProxy) ─────────
 let connectLoaded = false;
