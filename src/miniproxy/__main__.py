@@ -185,11 +185,14 @@ def build_parser() -> argparse.ArgumentParser:
                               "<port>`). Pass 0.0.0.0 to publish it.")
     p_start.add_argument("--allow-client", action="append", default=None,
                          metavar="IP",
-                         help="Restrict the PROXY port to this client IP "
-                              "(repeatable). The proxy runs with "
-                              "block_global=false so remote browsers can use "
-                              "it, which makes it an open relay otherwise — "
-                              "anyone who reaches the port captures through it. "
+                         help="LIMIT WHICH DESTINATIONS get intercepted "
+                              "(repeatable). NOT a client allowlist: despite "
+                              "the name this is mitmproxy's allow_hosts, which "
+                              "filters destination hosts. It does NOT stop "
+                              "anyone who can reach the port from proxying "
+                              "other destinations, so it does not close an "
+                              "open relay. For that use a firewall, or keep "
+                              "the proxy on loopback and tunnel over SSH. "
                               "e.g. --allow-client 203.0.113.7")
 
     p_web = sub.add_parser("web", help="Start the proxy AND the web dashboard (alias of start)")
@@ -442,9 +445,14 @@ def main(argv: list[str] | None = None) -> int:
         published = proxy_host not in ("127.0.0.1", "localhost", "::1")
         if published and not getattr(args, "allow_client", None):
             print("⚠  Proxy port %s is published on %s with NO client "
-                  "restriction (open relay). Pass --allow-client <your-ip> "
-                  "to restrict it."
+                  "restriction (open relay). Anyone who reaches it can proxy "
+                  "and capture. --allow-client will NOT fix this — it filters "
+                  "destination hosts, not clients. Use a firewall, or keep the "
+                  "proxy on loopback and tunnel over SSH."
                   % (result.get("port") or args.port, proxy_host))
+        if published and getattr(args, "allow_client", None):
+            print("⚠  --allow-client filters DESTINATION hosts, not clients — "
+                  "it does not restrict who may connect to this port.")
         if published:
             print("ℹ  Proxy published on %s — remote browsers must reach it "
                   "at <this-server>:%s. Loopback (the default) needs "

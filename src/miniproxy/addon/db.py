@@ -1193,10 +1193,18 @@ class Database:
         return bool(cur.rowcount)
 
     def enable_all_noise_rules(self, enabled: bool = True) -> int:
-        """Flip every rule at once (the 'opt into the built-in list' action)."""
+        """Flip the **bundled** rules at once (the 'opt into the built-in
+        list' action).
+
+        Scoped to ``builtin`` rows. This used to flip *every* rule, so a
+        deliberate "this host stays" rule of your own was silently re-enabled
+        the moment you opted into the bundled list — and the button says
+        bundled, and the UI cannot show you what a bundled row is once it has
+        been renamed.
+        """
         conn = self._connect()
         cur = conn.execute(
-            "UPDATE noise_rules SET enabled=?", (1 if enabled else 0,)
+            "UPDATE noise_rules SET enabled=? WHERE builtin=1", (1 if enabled else 0,)
         )
         conn.commit()
         conn.close()
@@ -1394,12 +1402,19 @@ class Database:
 
     # ── Intruder results ───────────────────────────────────────────────
 
-    def store_intruder_results(self, results: list[dict[str, Any]]) -> None:
+    def store_intruder_results(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Persist Intruder results, stamping each dict with its new row id.
+
+        The ids are attached **in place** on the dicts passed in, because the
+        caller hands the same list object to the client. The Intruder's own
+        results table has an id space separate from captures, so the dashboard
+        needs those ids to diff two of its results against each other.
+        """
         conn = self._connect()
         now = datetime.now(timezone.utc).isoformat()
         for r in results:
             try:
-                conn.execute(
+                cur = conn.execute(
                 "INSERT INTO intruder_results "
                 "(request_id, timestamp, payload, method, url, headers, "
                 "body, response_code, response_body, response_headers, ttfb_ms, total_ms) "
@@ -1419,12 +1434,14 @@ class Database:
                     r.get("total_ms"),
                 ),
                 )
+                r["id"] = cur.lastrowid
             except sqlite3.Error:
                 # FK violation (capture pruned mid-attack) or a malformed
                 # row must not lose the whole batch — skip and continue.
                 continue
         conn.commit()
         conn.close()
+        return results
 
     def get_intruder_results(self, request_id: int) -> list[dict[str, Any]]:
         conn = self._connect()
@@ -1434,6 +1451,19 @@ class Database:
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
+
+    def get_intruder_result(self, result_id: int) -> dict[str, Any] | None:
+        """One Intruder result by its own id.
+
+        ``intruder_results`` has an id space separate from the capture table,
+        so the Diff tab needs its own lookup to reach these rows.
+        """
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT * FROM intruder_results WHERE id=?", (result_id,)
+        ).fetchone()
+        conn.close()
+        return dict(row) if row is not None else None
 
     # ── Connected devices ──────────────────────────────────────────
 

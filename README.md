@@ -49,18 +49,27 @@ proxy never needs a public address:
 ssh -N -L 8080:127.0.0.1:8080 user@your-host
 ```
 
-To publish the proxy on a LAN/VPS interface instead, bind it explicitly and
-restrict who may connect:
+To publish the proxy on a LAN/VPS interface, bind it explicitly — but a
+published proxy is an **open relay**: anything that can reach the port can
+capture through it and write to your database.
+
+**`--allow-client` does not fix this.** Despite the name, it is passed to
+mitmproxy's `allow_hosts`, which filters **destination** hosts — it limits what
+gets intercepted, not who may connect. There is no client-IP allowlist in
+mitmproxy's option layer. To actually restrict access:
+
+- **Keep it on loopback and tunnel** (the SSH line above) — nothing is exposed.
+- Or **restrict at the firewall** — bind `0.0.0.0` and let `ufw`/`nftables`/
+  `iptables` admit only the addresses you intend.
 
 ```bash
-miniproxy start --proxy-host 0.0.0.0 --allow-client 203.0.113.7
+# LAN/VPS: bind wide, filter with the host firewall — not with --allow-client
+miniproxy start --proxy-host 0.0.0.0
+ufw allow from 203.0.113.7 to any port 8080 proto tcp
+ufw deny  8080/tcp
 ```
 
-`--allow-client` is repeatable. Without it, a published proxy is an open
-relay: anything that can reach the port can capture through it and write to
-your database.
-
-📚 **Full documentation in [`docs/`](docs/index.md)** — [setup](docs/setup.md) · [CLI & TUI](docs/cli-and-tui.md) · [web UI](docs/web-ui.md) · [connect browsers & devices](docs/connect.md) · [integrations](docs/integrations.md) · [troubleshooting](docs/troubleshooting.md) · [code audit](docs/AUDIT.md).
+📚 **Full documentation in [`docs/`](docs/index.md)** — [beginner's guide](docs/guide/README.md) · [setup](docs/setup.md) · [CLI & TUI](docs/cli-and-tui.md) · [web UI](docs/web-ui.md) · [connect browsers & devices](docs/connect.md) · [integrations](docs/integrations.md) · [troubleshooting](docs/troubleshooting.md) · [code audit](docs/AUDIT.md).
 
 ```bash
 miniproxy log                  # recent captured requests (with timing; reads the DB directly)
@@ -159,6 +168,7 @@ Tools that ignore proxy env vars can usually be pointed explicitly (`curl -x`, `
 - **Intruder** — `§param§` fuzzing in two modes: one wordlist into every position, or **pitchfork** (a different list per position — usernames × passwords, which is how auth labs are actually solved).
 - **Bundled wordlists** — IDs, usernames, passwords, parameter names, ports, paths. No `.txt` hunting on a fresh install.
 - **Paste a wordlist** — no file needed. Single list takes a live-updating paste box; every pitchfork row has its own. Newline- or comma-separated, `#` comments ignored, spaces kept so payloads like `admin' OR '1'='1` survive.
+- **Read the results** — sort by response size or status, filter by status class, or narrow to **only size outliers** (responses whose length differs from the most common) to surface the one anomalous reply. Any two results can be diffed against each other.
 - **Match & replace** — rewrite headers, query params or bodies on requests as they pass through the proxy.
 
 Captures persist across refreshes and restarts until you click

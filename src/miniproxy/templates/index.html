@@ -174,6 +174,22 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
 .popover hr{border:none;border-top:1px solid var(--border);margin:9px 0}
 .popover .pop-note{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.4}
 
+/* Intruder results: the toolbar that makes a few hundred rows readable. */
+.res-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  padding:8px 20px;border-bottom:1px solid var(--border)}
+.res-tools label{font-size:11px;color:var(--muted);display:inline-flex;
+  gap:5px;align-items:center}
+.res-tools select{width:auto;padding:4px 8px;font-size:12px}
+.pick-badge{display:inline-block;min-width:17px;height:17px;line-height:17px;
+  text-align:center;border-radius:4px;background:var(--accent);color:#fff;
+  font-size:10px;font-weight:700;margin-right:5px}
+#ires-hint{font-size:11px}
+@media (max-width:700px){
+  .res-tools{padding:8px 12px;gap:8px}
+  .res-tools label{flex:1 1 44%}
+  .res-tools select{flex:1}
+}
+
 /* ── Body viewers (Pretty / Raw / Hex) ───────────────────────────── */
 .btabs{display:flex;gap:4px;padding:8px 14px 0;flex-wrap:wrap;align-items:center}
 .btab{padding:3px 10px;border:1px solid var(--border);border-radius:5px;background:transparent;color:var(--muted);cursor:pointer;font-size:11px;font-weight:600}
@@ -460,7 +476,7 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
           <button class="btn btn-sm" id="d-save-body" title="Download the stored response body to disk">Save body…</button>
           <button class="btn btn-sm" id="d-hl" title="Highlight this capture (Burp-style)">Highlight…</button>
           <button class="btn btn-sm" id="d-note-btn" title="Notes for this capture">Note</button>
-          <button class="btn btn-sm" id="d-add-intruder" title="Send this request to the Intruder with §param§ markers">To Intruder</button>
+          <button class="btn btn-sm" id="d-add-intruder" title="Load this request into the Intruder editor. It does not add markers — put §param§ where the payload should go.">To Intruder</button>
           <button class="btn btn-sm" id="d-compare" title="Compare this capture with another">Compare…</button>
         </div>
       </div>
@@ -522,7 +538,7 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
         <label class="follow-box" title="Follow 3xx redirects and show the chain. Off by default: a lab that redirects is often redirecting to a login page.">
           <input type="checkbox" id="rfollow"> Follow redirects
         </label>
-        <button class="btn btn-sm" id="r-diff" title="Compare this tab's last response against a captured row">Compare…</button>
+        <button class="btn btn-sm" id="r-diff" title="Compare the capture selected in the Live tab against another. The Repeater's own responses are not captures, so they cannot be diffed.">Compare…</button>
         <span class="text-sm text-muted" id="r-msg"></span>
       </div>
       <div class="rep-hist" id="r-hist" style="display:none">
@@ -602,10 +618,34 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
   </div>
   <div class="card" id="ires" style="display:none">
     <div class="card-header">Results <span id="icnt" style="float:right"></span></div>
+    <!-- Finding the one response that behaved differently *is* the skill
+         behind username enumeration, so the table can be sorted by size,
+         filtered by status class, and narrowed to "outliers" — rows whose
+         response length differs from the most common length. Any two rows
+         can be diffed against each other. -->
+    <div class="res-tools">
+      <label>Sort <select id="ires-sort">
+        <option value="orig">sent order</option>
+        <option value="size-desc">size, biggest first</option>
+        <option value="size-asc">size, smallest first</option>
+        <option value="status">status code</option>
+      </select></label>
+      <label>Status <select id="ires-status">
+        <option value="">all</option>
+        <option value="2">2xx</option>
+        <option value="3">3xx</option>
+        <option value="4">4xx</option>
+        <option value="5">5xx</option>
+      </select></label>
+      <label><input type="checkbox" id="ires-outlier"> only size outliers</label>
+      <button class="btn btn-sm" id="ires-cmp" disabled>Compare A / B</button>
+      <span id="ires-hint" class="text-sm text-muted"></span>
+    </div>
     <div class="live-table-wrap">
       <table><thead><tr>
         <th style="width:40px">#</th><th style="width:180px">Payload</th>
         <th style="width:70px">Status</th><th>URL</th><th style="width:70px">Size</th>
+        <th style="width:64px"></th>
       </tr></thead><tbody id="iresb"></tbody></table>
     </div>
   </div>
@@ -860,6 +900,30 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
 </div>
 
 <!-- ══════════ Repeater modal (opened from the Live detail pane) ══════════ -->
+<div class="modal-backdrop" id="ires-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span>Response</span>
+      <span class="text-sm text-muted" id="ires-modal-meta"></span>
+      <div class="ml-auto">
+        <button class="btn btn-sm" id="ires-modal-close">Close (Esc)</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="rep-split">
+        <div class="col">
+          <label>Request sent</label>
+          <textarea id="ires-modal-req" style="flex:1" readonly></textarea>
+        </div>
+        <div class="col">
+          <label>Response body</label>
+          <textarea id="ires-modal-res" style="flex:1" readonly></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="rep-modal">
   <div class="modal">
     <div class="modal-header">
@@ -1130,7 +1194,15 @@ function restoreSession() {
     if (fi) document.getElementById("filter-id").value = fi;
     const fh = localStorage.getItem("mp.filter.host");
     if (fh) document.getElementById("filter-host").value = fh;
-    const fhs = localStorage.getItem("mp.filter-highlighted");
+    // These two were saved as "mp.filter.static" / "mp.filter.highlighted"
+    // (built by string-stripping the id) but read from "mp.filter-highlighted",
+    // so Highlighted never came back and Hide static was never read at all.
+    const fst = localStorage.getItem("mp.filter.static");
+    if (fst) {
+      document.getElementById("filter-static").checked = true;
+      document.getElementById("chip-static").classList.add("on");
+    }
+    const fhs = localStorage.getItem("mp.filter.highlighted");
     if (fhs) {
       document.getElementById("filter-highlighted").checked = true;
       document.getElementById("chip-hl").classList.add("on");
@@ -2247,8 +2319,24 @@ function pkChoose(id, tr) {
 function pkUseIt() {
   if (pkChosen == null) return;
   if (pkTarget === "repeater") applyRepeaterRequest(pkChosen);
-  else if (pkTarget === "diff-a") { diffA = pkChosen; switchTab("diff"); renderDiffPickers(); if (diffB) runDiff(); }
-  else if (pkTarget === "diff-b") { diffB = pkChosen; switchTab("diff"); renderDiffPickers(); if (diffA && diffA !== diffB) runDiff(); }
+  // The picker only ever lists captures, so choosing from it resets that
+  // side's source. A capture can never be compared with an Intruder result —
+  // different tables, different id spaces — so the mixed case is refused
+  // rather than silently diffing two unrelated rows.
+  else if (pkTarget === "diff-a" || pkTarget === "diff-b") {
+    const side = pkTarget === "diff-a" ? "a" : "b";
+    if (side === "a") { diffA = pkChosen; diffASrc = "capture"; }
+    else { diffB = pkChosen; diffBSrc = "capture"; }
+    switchTab("diff"); renderDiffPickers();
+    const other = side === "a" ? diffB : diffA;
+    if (other != null && diffA !== diffB) {
+      if (diffASrc === diffBSrc) runDiff();
+      else document.getElementById("diff-body").innerHTML =
+        '<div class="empty-note">A capture and an Intruder result cannot be ' +
+        'compared — they are different kinds of response. Pick both from the ' +
+        'same place.</div>';
+    }
+  }
   else applyIntruderRequest(pkChosen);
   pickModal.classList.remove("open");
 }
@@ -2292,6 +2380,7 @@ pickModal.addEventListener("click", ev => { if (ev.target === pickModal) pickMod
 document.addEventListener("keydown", ev => {
   if (ev.key === "Escape") {
     pickModal.classList.remove("open");
+    document.getElementById("ires-modal").classList.remove("open");
     closeRowMenu();
   }
 });
@@ -2622,6 +2711,25 @@ async function loadWordlistCards() {
 document.getElementById("istart").addEventListener("click", async () => {
   const rid = document.getElementById("isel").value;
   if (!rid) { alert("Select a request."); return; }
+  // The attack runs against what is in THIS editor, not the stored capture:
+  // the URL is where you aim it and the §markers§ are typed here. The server
+  // used to reload the capture and discard every edit.
+  const base = {
+    method: document.getElementById("imet").value,
+    url: document.getElementById("iurl").value.trim(),
+    headers: parseH(document.getElementById("ihed").value),
+    body: document.getElementById("ibod").value,
+  };
+  if (!base.url) { alert("Enter a URL to attack."); return; }
+  // Without a marker every request would be byte-identical — 1000 identical
+  // requests is 1000 wasted requests and a very confusing result table.
+  if (!/§[^§]+§/.test(base.url + "\n" + JSON.stringify(base.headers) + "\n" + base.body)) {
+    alert("No §placeholder§ markers in this request.\n\n" +
+      "Put §param§ where the payload goes — for example:\n" +
+      "  https://target.com/login?user=§user§&pass=§pass§\n\n" +
+      "Otherwise every word produces the exact same request.");
+    return;
+  }
   // Attacks run server-side in a background thread — start them, then poll
   // /api/intruder/status for progress instead of blocking the UI.
   let body;
@@ -2630,7 +2738,8 @@ document.getElementById("istart").addEventListener("click", async () => {
       alert("Paste a wordlist, pick a bundled list, or upload a .txt.");
       return;
     }
-    body = { request_id: parseInt(rid, 10), wordlist: iState.words.slice(0, WORDLIST_LIMIT) };
+    body = { request_id: parseInt(rid, 10), base: base,
+             wordlist: iState.words.slice(0, WORDLIST_LIMIT) };
   } else {
     const lists = {};
     Object.keys(iState.pitch).forEach(n => {
@@ -2640,7 +2749,7 @@ document.getElementById("istart").addEventListener("click", async () => {
       alert("Choose a wordlist for at least one placeholder."); return;
     }
     renderPitchRows(); // keep the displayed words in step with what is sent
-    body = { request_id: parseInt(rid, 10), mode: "pitchfork", lists: lists };
+    body = { request_id: parseInt(rid, 10), base: base, mode: "pitchfork", lists: lists };
   }
   const btn = document.getElementById("istart");
   btn.disabled = true; btn.textContent = "Running…";
@@ -2667,23 +2776,160 @@ document.getElementById("istart").addEventListener("click", async () => {
     }, 500);
   } catch (e) { btn.disabled = false; btn.textContent = "Start attack"; alert("Failed: " + e.message); }
 });
+// ── Intruder results: sort, filter, outliers, and compare ───────────
+// Reading a few hundred rows for the one that behaved differently is the
+// whole skill behind username enumeration, so the table can be sorted by
+// response size, filtered by status class, and narrowed to *outliers* — rows
+// whose response length differs from the most common length. Two selected
+// rows can then be diffed against each other.
+//
+// Before this, the only way to inspect a response was an alert() and the only
+// thing the table offered was an unordered list, so finding the outlier meant
+// squinting at every row.
+let ires = { rows: [], sort: "orig", status: "", outlier: false, sel: [], selectable: false };
+
+const resLen = r => (r.response_body || "").length;
+
+// The most common response length across every row. Computed over ALL rows,
+// never the filtered subset — otherwise turning the filter on would move the
+// baseline and the "outliers" would shift underneath the user.
+function modalResponseLen(rows) {
+  const counts = new Map();
+  rows.forEach(r => counts.set(resLen(r), (counts.get(resLen(r)) || 0) + 1));
+  let best = 0, bestN = -1;
+  counts.forEach((n, len) => { if (n > bestN) { best = len; bestN = n; } });
+  return best;
+}
+
+function visibleResults() {
+  let rows = ires.rows.slice();
+  if (ires.status) {
+    rows = rows.filter(
+      r => Math.floor((r.response_code || 0) / 100) === Number(ires.status));
+  }
+  if (ires.outlier) {
+    const baseline = modalResponseLen(ires.rows);
+    rows = rows.filter(r => resLen(r) !== baseline);
+  }
+  const cmp = {
+    "size-desc": (a, b) => resLen(b) - resLen(a) || a.__i - b.__i,
+    "size-asc": (a, b) => resLen(a) - resLen(b) || a.__i - b.__i,
+    "status": (a, b) => (a.response_code || 0) - (b.response_code || 0) || resLen(b) - resLen(a),
+  }[ires.sort];
+  if (cmp) rows.sort(cmp);
+  return rows;
+}
+
 function showRes(rr) {
   document.getElementById("ires").style.display = "block";
-  document.getElementById("icnt").textContent = rr.length + " requests";
+  // __i is the position in send order, kept so the # column still reads
+  // "the 37th request I sent" after sorting instead of renumbering.
+  ires.rows = (rr || []).map((r, i) => { r.__i = i + 1; return r; });
+  ires.sel = [];
+  // `store_intruder_results` is deliberately wrapped in a bare `except: pass`
+  // so persistence problems never lose the results, but that also means a
+  // schema mismatch can leave rows with no id — and no id means nothing to
+  // diff. Detect that rather than rendering Compare buttons that quietly do
+  // nothing.
+  ires.selectable = ires.rows.length > 0 && ires.rows.every(r => r.id != null);
+  renderIntruderResults();
+}
+
+function renderIntruderResults() {
+  const rows = visibleResults();
+  const total = ires.rows.length;
+  const hidden = total - rows.length;
+  document.getElementById("icnt").textContent =
+    total + " requests" + (hidden ? " · showing " + rows.length : "");
+
+  const base = ires.outlier ? modalResponseLen(ires.rows) : null;
+  const hint = document.getElementById("ires-hint");
+  if (!total) {
+    hint.textContent = "";
+  } else if (!ires.selectable) {
+    hint.textContent = "These responses were not saved to the database, so " +
+      "they cannot be compared. Sorting and filtering still work.";
+  } else if (ires.outlier) {
+    hint.textContent = rows.length
+      ? "Most responses are " + base + " chars — these " + rows.length + " differ."
+      : "Every response is the same size (" + base + " chars); nothing stands out.";
+  } else {
+    hint.textContent = ires.sel.length === 1
+      ? "Now pick a second row to compare."
+      : "Tap two rows to compare them.";
+  }
+
+  const btn = document.getElementById("ires-cmp");
+  btn.disabled = ires.sel.length !== 2 || !ires.selectable;
+  btn.textContent = ires.sel.length === 2
+    ? "Compare " + ires.sel[0] + " / " + ires.sel[1]
+    : "Compare A / B";
+
   const tb = document.getElementById("iresb");
-  tb.innerHTML = rr.map((r, i) =>
-    '<tr class="log-row" data-i="' + i + '">' +
-    "<td>" + (i + 1) + '</td><td class="trunc" style="max-width:200px">' + esc(r.payload) + "</td>" +
-    '<td class="status ' + scls(r.response_code) + '">' + r.response_code + "</td>" +
-    '<td class="trunc" style="max-width:340px">' + esc(r.url) + "</td>" +
-    "<td>" + (r.response_body ? r.response_body.length + "B" : "-") + "</td></tr>"
-  ).join("");
-  tb.querySelectorAll("tr").forEach(tr =>
-    tr.addEventListener("click", () => {
-      const r = rr[parseInt(tr.dataset.i, 10)];
-      alert("Payload: " + r.payload + "\nStatus: " + r.response_code + "\n\nBody:\n" + (r.response_body || "(empty)").slice(0, 3000));
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="6"><div class="empty-note">' +
+      (total ? "No responses match these filters." : "No results yet.") + "</div></td></tr>";
+    return;
+  }
+  tb.innerHTML = rows.map(r => {
+    const at = ires.sel.indexOf(r.id);
+    const badge = at < 0 ? "" : '<span class="pick-badge">' + (at === 0 ? "A" : "B") + "</span>";
+    return '<tr class="log-row' + (at >= 0 ? " selected" : "") + '" data-rid="' + r.id + '">' +
+      "<td>" + r.__i + "</td>" +
+      '<td class="trunc" style="max-width:200px">' + badge + esc(r.payload) + "</td>" +
+      '<td class="status ' + scls(r.response_code) + '">' + r.response_code + "</td>" +
+      '<td class="trunc" style="max-width:340px">' + esc(r.url) + "</td>" +
+      "<td>" + resLen(r) + "</td>" +
+      '<td><button class="btn btn-sm" data-rview="' + r.id + '">View</button></td></tr>';
+  }).join("");
+
+  tb.querySelectorAll("tr[data-rid]").forEach(tr => {
+    tr.addEventListener("click", ev => {
+      if (ev.target.closest("[data-rview]")) return;
+      if (!ires.selectable) return;
+      toggleResultSel(parseInt(tr.dataset.rid, 10));
+    });
+  });
+  tb.querySelectorAll("[data-rview]").forEach(b =>
+    b.addEventListener("click", ev => {
+      ev.stopPropagation();
+      openResultModal(parseInt(b.dataset.rview, 10));
     }));
 }
+
+function toggleResultSel(id) {
+  const at = ires.sel.indexOf(id);
+  if (at >= 0) ires.sel.splice(at, 1);
+  // Two slots only: the third tap starts over rather than silently dropping
+  // the earlier pick, which is what makes a mis-tap cheap to recover from.
+  else if (ires.sel.length < 2) ires.sel.push(id);
+  else ires.sel = [ires.sel[1], id];
+  renderIntruderResults();
+}
+
+function openResultModal(id) {
+  const r = ires.rows.find(x => x.id === id);
+  if (!r) return;
+  document.getElementById("ires-modal-meta").textContent =
+    r.payload + "  ·  status " + r.response_code + "  ·  " + resLen(r) + " chars";
+  document.getElementById("ires-modal-req").value =
+    r.method + " " + r.url + "\n\n" + (r.body || "(no request body)");
+  document.getElementById("ires-modal-res").value = r.response_body || "(empty)";
+  document.getElementById("ires-modal").classList.add("open");
+}
+
+document.getElementById("ires-modal-close").addEventListener("click", () =>
+  document.getElementById("ires-modal").classList.remove("open"));
+document.getElementById("ires-sort").addEventListener("change", e => {
+  ires.sort = e.target.value; renderIntruderResults(); });
+document.getElementById("ires-status").addEventListener("change", e => {
+  ires.status = e.target.value; renderIntruderResults(); });
+document.getElementById("ires-outlier").addEventListener("change", e => {
+  ires.outlier = e.target.checked; renderIntruderResults(); });
+document.getElementById("ires-cmp").addEventListener("click", () => {
+  if (ires.sel.length !== 2) return;
+  openDiff(ires.sel[0], ires.sel[1], "intruder");
+});
 
 // ── export / clear ───────────────────────────────────────────────────
 const exportBtn = document.getElementById("export-btn");
@@ -2736,37 +2982,62 @@ document.getElementById("clear-btn").addEventListener("click", async () => {
 // The access-control workflow: compare two captures and read off what the
 // changed parameter actually did. Reachable from the detail pane, the repeater
 // and the ⋮ menu.
+// A and B may each be a captured request or an Intruder result. They live in
+// different tables with different id spaces, so each side carries its own
+// source and the right endpoint is chosen per side.
 let diffA = null, diffB = null, diffResult = null, diffBodies = null;
+let diffASrc = "capture", diffBSrc = "capture";
 const diffMode = "auto";
 let diffPane = "fields";
 
-function openDiff(aId, bId) {
+function diffApi(side) {
+  const id = side === "a" ? diffA : diffB;
+  const src = side === "a" ? diffASrc : diffBSrc;
+  if (id == null) return null;
+  return src === "intruder"
+    ? "/api/diff/intruder/" + id
+    : "/api/diff/" + id;
+}
+
+function openDiff(aId, bId, src) {
+  diffASrc = diffBSrc = src || "capture";
   diffA = aId || null;
   diffB = bId || null;
   diffBodies = null;
   diffResult = null;
   renderDiffPickers();
   switchTab("diff");
-  if (aId && bId && aId !== bId) runDiff();
+  if (aId && bId && aId !== bId && diffASrc === diffBSrc) runDiff();
   else document.getElementById("diff-body").innerHTML =
     '<div class="empty-note">Pick two different captures to compare — ' +
-    'use <b>Pick…</b> on A and B, or the <b>⋮</b> menu on a captured row.</div>';
+    'use <b>Pick…</b> on A and B, the <b>⋮</b> menu on a captured row, or ' +
+    'select two rows in the <b>Intruder</b> results table.</div>';
 }
 function renderDiffPickers() {
-  const row = id => {
+  const captureLabel = id => {
     const r = state.rows.find(x => x.id === id) || state.logCache.find(x => x.id === id);
     return r ? "#" + r.id + " · " + r.method + " " + String(r.url || "").slice(0, 60) : "—";
   };
-  document.getElementById("diff-a").textContent = row(diffA);
-  document.getElementById("diff-b").textContent = row(diffB);
+  const intruderLabel = id => {
+    const r = ires.rows.find(x => x.id === id);
+    return r ? "result #" + r.id + " · " + String(r.payload || "").slice(0, 40)
+             : "result #" + id;
+  };
+  const side = (id, src) => id == null ? "—"
+    : (src === "intruder" ? intruderLabel(id) : captureLabel(id));
+  document.getElementById("diff-a").textContent = side(diffA, diffASrc);
+  document.getElementById("diff-b").textContent = side(diffB, diffBSrc);
   document.getElementById("diff-pair").textContent =
-    (diffA ? "#" + diffA : "—") + " vs " + (diffB ? "#" + diffB : "—");
+    (diffA == null ? "—" : (diffASrc === "intruder" ? "R" : "#") + diffA) +
+    " vs " +
+    (diffB == null ? "—" : (diffBSrc === "intruder" ? "R" : "#") + diffB);
 }
 async function runDiff() {
   if (!diffA || !diffB) return;
   const out = document.getElementById("diff-body");
   out.innerHTML = '<div class="empty-note">Comparing…</div>';
-  const { ok, data } = await api("/api/diff/" + diffA + "/" + diffB +
+  const aPath = diffApi("a"), bPath = diffApi("b");
+  const { ok, data } = await api(aPath + "/" + diffB +
                                 "?mode=" + encodeURIComponent(diffMode) +
                                 "&include_bodies=1");
   if (!ok) {
@@ -2775,8 +3046,13 @@ async function runDiff() {
     return;
   }
   diffResult = data;
-  diffBodies = { a: { response_body: data.body_a || "" },
-                 b: { response_body: data.body_b || "" } };
+  // The raw A/B bodies come from their own endpoint. They used to be read
+  // off `data.body_a`/`data.body_b`, which the diff payload never contained —
+  // so the A body / B body panes silently rendered "(empty)" for every pair.
+  const bodies = await api(aPath + "/" + diffB + "/bodies");
+  diffBodies = bodies.ok && bodies.data
+    ? { a: bodies.data.a || {}, b: bodies.data.b || {} }
+    : { a: {}, b: {} };
   document.getElementById("diff-summary").innerHTML =
     '<span class="status ' + (data.identical ? "s-2xx" : "s-4xx") + '">' +
     esc(data.summary) + "</span>";
@@ -2872,8 +3148,9 @@ document.querySelectorAll("[data-pick]").forEach(b =>
   b.addEventListener("click", () => openPicker("diff-" + b.dataset.pick)));
 document.getElementById("diff-swap").addEventListener("click", () => {
   const t = diffA; diffA = diffB; diffB = t;
+  const s = diffASrc; diffASrc = diffBSrc; diffBSrc = s;  // sources travel with the ids
   renderDiffPickers();
-  if (diffA && diffB && diffA !== diffB) runDiff();
+  if (diffA && diffB && diffA !== diffB && diffASrc === diffBSrc) runDiff();
 });
 
 

@@ -351,3 +351,28 @@ def test_count_matches_list_length(db):
 def test_invalid_status_class_still_raises(db):
     with pytest.raises(ValueError):
         db.count_logs(status_class="9")
+
+def test_enabling_the_bundled_list_leaves_your_own_rules_alone(db):
+    """"Enable bundled list" must enable the bundled rules.
+
+    It used to flip *every* row, so a rule you deliberately switched off —
+    "keep this host" — was silently re-enabled the moment you opted into the
+    bundled list, under a button whose name promises it will not happen.
+    """
+    db.add_noise_rule("my-important-host.example", "host", False)
+    changed = db.enable_all_noise_rules(True)
+    assert changed > 0, "no bundled rules were enabled"
+    mine = [r for r in db.list_noise_rules()
+            if r["value"] == "my-important-host.example"]
+    assert mine and mine[0]["enabled"] == 0, "a custom rule was switched on"
+    # The bundled ones really did flip.
+    assert any(r["enabled"] for r in db.list_noise_rules() if r["builtin"])
+
+
+def test_disabling_the_bundled_list_leaves_your_own_rules_alone(db):
+    db.add_noise_rule("my-important-host.example", "host", True)
+    db.enable_all_noise_rules(True)
+    db.enable_all_noise_rules(False)
+    still_on = [r for r in db.list_noise_rules()
+                if not r["builtin"] and r["enabled"]]
+    assert still_on, "a custom rule was switched off"

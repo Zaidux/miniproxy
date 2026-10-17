@@ -592,16 +592,54 @@ def diff_captures(a_id: int, b_id: int):
 
     ``?mode=json|token|char`` forces a specific view.
     """
-    from miniproxy.diff import diff_captures as _diff
+    return _diff_response(db.get_request, a_id, b_id, noun="capture")
 
-    a, b = db.get_request(a_id), db.get_request(b_id)
+
+@app.route("/api/diff/<int:a_id>/<int:b_id>/bodies")
+def diff_bodies(a_id: int, b_id: int):
+    """The two raw bodies for the diff view (fetched on demand)."""
+    return _diff_bodies_response(db.get_request, a_id, b_id, noun="capture")
+
+
+# Intruder results live in their own table (`intruder_results`), not in the
+# capture table, so they were unreachable from the Diff tab — even though
+# comparing two fuzzed responses against each other is exactly what
+# username-enumeration work needs ("which username produced the different
+# error?"). They carry the same fields `diff_captures` reads, so the same
+# engine and the same view serve both.
+@app.route("/api/diff/intruder/<int:a_id>/<int:b_id>")
+def diff_intruder(a_id: int, b_id: int):
+    """Compare two Intruder results exactly as two captures are compared."""
+    return _diff_response(db.get_intruder_result, a_id, b_id, noun="Intruder result")
+
+
+@app.route("/api/diff/intruder/<int:a_id>/<int:b_id>/bodies")
+def diff_intruder_bodies(a_id: int, b_id: int):
+    """Raw bodies for two Intruder results."""
+    return _diff_bodies_response(db.get_intruder_result, a_id, b_id, noun="Intruder result")
+
+
+def _lookup_diff_rows(getter, a_id: int, b_id: int, noun: str = "row"):
+    """Resolve two rows through `getter`, or return a Flask error response."""
+    a, b = getter(a_id), getter(b_id)
     if a is None or b is None:
         missing = a_id if a is None else b_id
-        return jsonify({"error": f"capture {missing} not found"}), 404
+        return None, jsonify({"error": f"{noun} {missing} not found"}), 404
     if a_id == b_id:
-        # Comparing a capture with itself is almost certainly a mis-click;
+        # Comparing a row with itself is almost certainly a mis-click;
         # say so rather than returning a confident "identical".
-        return jsonify({"error": "pick two different captures to compare"}), 400
+        return None, jsonify({"error": f"pick two different {noun}s to compare"}), 400
+    return (a, b), None, None
+
+
+def _diff_response(getter, a_id: int, b_id: int, noun: str = "row"):
+    """Shared diff payload for captures and Intruder results alike."""
+    from miniproxy.diff import diff_captures as _diff
+
+    rows, err, code = _lookup_diff_rows(getter, a_id, b_id, noun)
+    if err is not None:
+        return err, code
+    a, b = rows
     try:
         result = _diff(a, b, mode=flask_request.args.get("mode", "auto"))
     except ValueError as exc:
@@ -614,12 +652,11 @@ def diff_captures(a_id: int, b_id: int):
     return jsonify(result)
 
 
-@app.route("/api/diff/<int:a_id>/<int:b_id>/bodies")
-def diff_bodies(a_id: int, b_id: int):
-    """The two raw bodies for the diff view (fetched on demand)."""
-    a, b = db.get_request(a_id), db.get_request(b_id)
-    if a is None or b is None:
-        return jsonify({"error": "not found"}), 404
+def _diff_bodies_response(getter, a_id: int, b_id: int, noun: str = "row"):
+    rows, err, code = _lookup_diff_rows(getter, a_id, b_id, noun)
+    if err is not None:
+        return err, code
+    a, b = rows
     return jsonify({
         "a": {"body": a.get("body") or "", "response_body": a.get("response_body") or ""},
         "b": {"body": b.get("body") or "", "response_body": b.get("response_body") or ""},
@@ -879,6 +916,29 @@ def intruder_start():
     base = db.get_request(int(req_id))
     if base is None:
         return jsonify({"error": "base request not found"}), 404
+
+    # The dashboard sends the request **as edited in the Intruder tab** when it
+    # has one. That used to be ignored in favour of the stored capture, which
+    # made every edit in the tab a no-op: aim the URL somewhere else, fix a
+    # header, add a §placeholder§ — none of it reached the wire, and there was
+    # no other way to introduce a marker at all. Older clients that send only
+    # request_id still fall back to the stored capture.
+    override = data.get("base")
+    if isinstance(override, dict):
+        base = dict(base)
+        method = str(override.get("method") or "").strip().upper()
+        if method:
+            base["method"] = method
+        url = str(override.get("url") or "").strip()
+        if url:
+            base["url"] = url
+        headers = override.get("headers")
+        if isinstance(headers, dict) and headers:
+            base["headers"] = {str(k): str(v) for k, v in headers.items()}
+        elif isinstance(headers, dict) and not headers:
+            base["headers"] = {}
+        if override.get("body") is not None:
+            base["body"] = str(override["body"])
 
     total = (len(wordlist) if mode != "pitchfork"
              else _combo_total(cleaned))  # type: ignore[arg-type]

@@ -121,8 +121,11 @@ class Intruder:
         — you could only confirm that "admin" paired with "admin" works.
 
         ``lists`` maps a placeholder name to its wordlist. A position with no
-        entry keeps its literal ``§name§`` text in the request, so the result
-        rows say exactly what was sent.
+        entry is substituted with an **empty string**, not left as literal
+        text — this docstring used to claim the opposite, which is how the
+        behaviour stayed wrong for so long. Configure every marker you care
+        about: a pitchfork of ``?user=§user§&pass=§pass§`` with only ``user``
+        configured sends ``?user=admin&pass=``.
         """
         from itertools import product
 

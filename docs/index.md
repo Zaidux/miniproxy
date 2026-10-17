@@ -9,6 +9,7 @@ you can start the proxy once and inspect traffic from any interface.
 
 | Doc | What's in it |
 |-----|--------------|
+| [Beginner's guide](guide/README.md) | Start here if you're learning: every feature explained in plain language, with worked lab examples |
 | [Setup](setup.md) | Install, first run, HTTPS/CA certificates, updating |
 | [CLI & TUI](cli-and-tui.md) | Every `miniproxy` command, TUI keys & workflows |
 | [Web UI](web-ui.md) | The browser dashboard that mirrors the TUI |

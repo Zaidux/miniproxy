@@ -201,6 +201,17 @@ the difference — for example `role: 'user' → 'admin'`. Six views:
 The mode is chosen automatically for the data present (JSON → tokens → bytes),
 and the summary line names the field rather than just counting them.
 
+Two verdicts appear, and they answer different questions:
+
+| Field | Means |
+|-------|-------|
+| **status** (`same` / `different`) | **status codes only** — did the server return the same code? |
+| **identical** | the whole row: status, headers, params, request body and response body |
+
+Two responses can be `status: same` and still `identical: false` — identical
+`200`s that differ only in a query parameter, for example. Read `identical`,
+not `status`, when asking whether anything changed at all.
+
 ### Searching bodies
 
 The **Search bodies…** box filters on the request **and** response body, not
@@ -375,6 +386,7 @@ those hosts is skipped at capture time.
 | `POST /api/noise/clean` | delete; requires `{"confirm": true}` |
 | `PATCH /api/logs/<id>` | set `highlight` and/or `note` |
 | `GET /api/diff/<a>/<b>` | compare two captures (`?mode=json\|token\|char`) |
+| `GET /api/diff/intruder/<a>/<b>` | compare two Intruder results, same engine |
 | `GET /api/repeater/tabs` | repeater tabs (+ `history` per tab) |
 | `GET /api/rewrite` | match & replace rules |
 | `GET /api/wordlists` | the bundled wordlists |
@@ -396,7 +408,7 @@ alongside method/status/url/id.
 | **Pitchfork** | a **different** wordlist per placeholder, combined as a product |
 
 4. **Start attack** — results are color-coded by status and stored in the DB.
-5. Click a row to see the payload's full response.
+5. Click **View** on a row to see the exact request sent and its full response.
 
 **Pitchfork** is the one that solves authentication labs: `§user§` from a
 username list crossed with `§pass§` from a password list. The Single list mode
@@ -407,6 +419,47 @@ the target request. Each row takes a bundled list, a paste, or your own
 upload, and the line above **Start attack** shows the product before you commit
 (`2 lists → 30 requests`). Combinations are capped at 10,000; over that, shrink
 a list.
+
+### Reading the results
+
+Attacks are sent **sequentially** — one request at a time, each waiting on the
+previous response. There is no delay or rate-limit setting, and no concurrency
+knob. It is gentler on a rate-limited target than a tool that fires N threads,
+but you cannot slow it further; if a lab locks an account, shorten the list.
+
+The toolbar above the results table exists because the task is reading N
+responses for the one that behaved differently:
+
+| Control | Effect |
+|---------|--------|
+| **Sort** | send order, response size (either direction), or status code |
+| **Status** | restrict to `2xx` / `3xx` / `4xx` / `5xx` |
+| **only size outliers** | keep only rows whose response length differs from the **most common** length |
+
+**Only size outliers** is username enumeration, mechanically: a login form that
+replies "Invalid password" for a real user and "Invalid username" for a fake
+one gives one response of a different size. The baseline is measured across all
+rows *before* filtering, so turning the filter on does not move the baseline.
+When every response is the same size it says so explicitly instead of implying
+there are no results.
+
+The `#` column is the position in **send order** and does not renumber when you
+sort — a number that changes when you reorder is worse than no number.
+
+Tapping a row selects it for comparison: the first tap is **A**, the second
+**B**, a third replaces the older pick. With two selected, **Compare A / B**
+sends them to the **Diff tab**, using the same engine and views as a capture
+comparison.
+
+> Intruder results are stored in `intruder_results`, not in the capture table,
+> and the requests are sent **directly from the dashboard rather than through
+> the proxy**. Two consequences worth knowing:
+> - Intruder and Repeater traffic does **not** appear in the Live or Log tabs.
+> - A capture and an Intruder result cannot be compared with each other — the
+>   dashboard refuses rather than diffing two unrelated things.
+>
+> The row ids in the two tables are separate, so the picker (`Pick…`) always
+> yields captures and resets the side it fills to "capture".
 
 ### Pasting a wordlist
 

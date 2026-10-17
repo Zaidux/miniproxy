@@ -12,6 +12,88 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+### Added
+
+- **The Intruder results table can be sorted, filtered, and diffed.** Finding
+  the one response out of hundreds that behaved differently *is* the skill
+  behind username enumeration, and the table previously offered neither
+  ordering nor comparison — you got an unordered list and an `alert()`.
+  - **Sort** by response size (either direction) or status code.
+  - **Filter** by status class (`2xx` / `3xx` / `4xx` / `5xx`).
+  - **Only size outliers** narrows the table to rows whose response length
+    differs from the *most common* length. The baseline is measured across
+    all rows before filtering, so switching the filter on never moves the
+    baseline out from under you. When every response is the same size it says
+    so rather than implying there are no results.
+  - The `#` column keeps its original send order after sorting, so a number
+    that changes when you reorder is never shown.
+  - **Compare A / B**: select any two rows and diff them against each other in
+    the Diff tab. This needed plumbing — Intruder results live in
+    `intruder_results`, a separate table with a separate id space from
+    captures, and the results returned to the client carried no `id` at all.
+    `store_intruder_results` now stamps each result with its new row id.
+
+### Fixed
+
+- **The Intruder attacked the stored capture and ignored everything you typed.**
+  The dashboard sent only a request ID, and the server reloaded that capture
+  from the database and substituted into *it*. Every edit in the Intruder tab
+  was silently discarded — you could not retarget the URL, fix a header, or
+  introduce a `§placeholder§` from the UI at all, and there was no other way
+  to add one. (Older guides work around this by building the request with
+  `curl` through the proxy.) The tab now sends the Method / URL / Headers /
+  Body exactly as shown, and the server uses them when supplied, falling back
+  to the stored capture for older clients. **Start attack** also now refuses a
+  request with no `§markers§` instead of firing a wordlist of identical
+  requests.
+- **`Hide static` and `Highlighted` never came back after a reload.** The two
+  chips saved to `mp.filter.static` / `mp.filter.highlighted` (built by
+  string-stripping the element id) but were restored from
+  `mp.filter-highlighted` — a different key — and `static` was never read at
+  all. Both now restore from the keys they actually write.
+- **`--allow-client` does not do what it says, and the README recommended it as
+  a security control.** Despite the name it is passed to mitmproxy's
+  `allow_hosts`, which filters **destination** hosts — not who may connect to
+  the proxy port. So it does not close an open relay, which is exactly what
+  the flag's help text and the README claimed it did. mitmproxy has no
+  client-IP allowlist in its option layer, so the help, the runtime warning
+  and the README now say so and point at a firewall or an SSH tunnel instead
+  of implying the flag is a lock.
+- **Two tooltips promised more than the code did.** `To Intruder` said it
+  loaded the request "with §param§ markers" (it adds none), and the Repeater's
+  `Compare…` said it compared the tab's last response (it uses the capture
+  selected in Live). Both now describe what they actually do.
+- **The Diff tab's "A body" / "B body" panes were permanently empty.**
+  `runDiff` read `data.body_a` / `data.body_b`, which the diff payload has
+  never contained, so both panes rendered `(empty)` for every comparison.
+  They are now fetched from the `/bodies` endpoint, which existed but was
+  never called.
+- **A capture and an Intruder result could be diffed as if they were
+  comparable.** They are different kinds of row in different id spaces, so
+  mixing them is now refused with an explanation rather than silently
+  producing a meaningless diff. Sources also travel with the ids when A and B
+  are swapped.
+- **Result rows opened an `alert()`**, which is blocking, unscrollable, and
+  unreadable for a multi-KB body. Replaced with a View modal showing the exact
+  request sent alongside the response.
+- Results that failed to persist have no row id, and therefore nothing to
+  diff. The results table now says so and disables **Compare** instead of
+  offering a button that quietly does nothing.
+
+### Docs
+
+- **New beginner guide** in [`docs/guide/`](docs/guide/README.md) — what each
+  feature is for and how to use it, in plain language, with worked examples
+  from the PortSwigger labs.
+- The guide also documents several behaviours the existing reference docs
+  glossed over or got wrong: results are not captures and never appear in
+  Live/Log or a HAR export; Intruder and Repeater send directly rather than
+  through the proxy, so Rewrite/Noise/scope do not apply to them; the Live tab
+  shows only the newest 200 rows and its counter counts that window; exports
+  cap at 1,000 rows; Notes are not searchable; an unconfigured pitchfork
+  placeholder is substituted with an empty string, not left as literal text;
+  and cookie state persists across attacks until the dashboard restarts.
+
 ## [0.8.1] — 2026-10-17
 
 ### Added
