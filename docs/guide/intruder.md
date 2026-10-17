@@ -60,17 +60,27 @@ from a capture, and the attack is stored against that request's ID — so pick a
 request, then edit the boxes freely.
 
 **If you forget a marker**, **Start attack** stops and tells you, rather than
-firing a wordlist of identical requests.
+firing a wordlist of identical requests. The server enforces this too, so a
+stale browser tab cannot slip one through.
 
 ### Checking it worked
 
 Look at the **URL** column of the first two results, or press **View** on a
 result and read **Request sent**. If the payload appears where the marker was,
-substitution is happening. If every row shows the same URL, there was no
-marker.
+substitution is happening.
+
+**If every request was identical, the results table says so** — it puts a line
+under the toolbar reading *"All N requests sent the same URL — no payload was
+substituted, so the wordlist was ignored."* A table full of identical rows is
+otherwise easy to mistake for a finished attack.
 
 ### Common mistakes / notes
 
+- **Reload the dashboard after an upgrade.** A tab opened before the upgrade
+  keeps running the old page, and older builds discarded the Intruder boxes
+  entirely — the attack would target the stored capture and quietly send the
+  same request N times. If results look identical or your edits seem ignored,
+  reload before assuming the tool is broken.
 - The **To Intruder** button (detail pane and **⋮** menu) copies a capture
   into the boxes so you can edit from there. It does not add markers for you.
 - The same marker name can appear more than once and is substituted in every
@@ -187,7 +197,10 @@ with one list of passwords.
 2. Click **Pitchfork**. The hint reads
    `A different wordlist per placeholder — e.g. usernames × passwords.`
 3. The tab grows **one row per placeholder** it finds in the URL, body and
-   headers. Rows are alphabetical.
+   headers. Rows are alphabetical. If you add or remove a marker afterwards the
+   rows update on their own — the empty state's *"add some and they appear
+   here"* is literal, not an instruction to toggle the mode. There is no need
+   to leave Pitchfork and come back.
 4. For each row, choose a source:
    - pick a bundled list from `— choose a bundled list —`;
    - upload a `.txt`;
@@ -293,7 +306,19 @@ whole skill behind enumeration.
    - **Size** — response body length in characters.
 2. Click **View** on a row to open a read-only **Response** window with
    **Request sent** (method, URL, body) and **Response body**.
-3. Close it with **Close (Esc)** or **Esc**.
+3. Step to the next or previous result with **Next ›** / **‹ Prev**, or the
+   ← / → arrow keys, instead of closing and reopening. The header shows where
+   you are (`3 / 101`) alongside the payload, status and size.
+4. Close it with **Close (Esc)** or **Esc**.
+
+**Next/Prev follow what is on screen**, including your sort and filters. With
+**only size outliers** ticked, stepping visits just the outliers, so you are
+not paging through the hundreds of responses you already ruled out.
+
+On a phone the two panes stack (request above, response below) and the
+response takes most of the height — side by side at 412px leaves too little
+width to read an HTML body. Both panes are selectable, so you can copy a value
+out.
 
 On a phone, the **Payload** and **URL** columns truncate. Open **View** to read
 the full request and response instead of trying to scroll the table sideways.

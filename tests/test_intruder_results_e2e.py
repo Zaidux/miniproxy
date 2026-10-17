@@ -552,3 +552,172 @@ def test_starting_without_a_marker_is_refused(page):
     page.wait_for_timeout(1200)
     assert any("placeholder" in d for d in dialogs), dialogs
     assert page.query_selector_all("#iresb tr[data-rid]") == [], "attack ran anyway"
+
+
+# ── pitchfork rows follow edits to the request ──────────────────────
+#
+# Rows are derived from the markers in the request. renderPitchRows() used to
+# run only on a mode switch, so the empty state promised "add some ... and they
+# appear here" and then nothing appeared when you did — you had to toggle the
+# mode off and back on.
+
+def test_pitchfork_rows_appear_when_markers_are_typed(page):
+    page.fill("#iurl", "https://target.example/login")
+    page.wait_for_timeout(250)
+    page.click("#i-mode-pitch")
+    page.wait_for_timeout(400)
+    assert "No §placeholder§" in text(page, "#pf-lists"), text(page, "#pf-lists")
+
+    page.fill("#iurl", "https://target.example/login?u=§user§&p=§pass§")
+    page.wait_for_timeout(900)   # debounce is 350ms
+    rows = page.query_selector_all("#pf-lists .pf-row")
+    assert len(rows) == 2, f"rows did not appear after typing markers: {len(rows)}"
+
+
+def test_pitchfork_rows_disappear_when_the_marker_is_removed(page):
+    page.fill("#iurl", "https://target.example/login?u=§user§&p=§pass§")
+    page.wait_for_timeout(250)
+    page.click("#i-mode-pitch")
+    page.wait_for_timeout(600)
+    assert len(page.query_selector_all("#pf-lists .pf-row")) == 2
+
+    page.fill("#iurl", "https://target.example/login?u=§user§")
+    page.wait_for_timeout(900)
+    rows = page.query_selector_all("#pf-lists .pf-row")
+    assert len(rows) == 1, len(rows)
+    assert "§user§" in page.inner_text("#pf-lists")
+
+
+def test_editing_the_request_does_not_close_an_open_paste_box(page):
+    """Re-rendering on every request edit would close the paste box and drop
+    a half-typed list. Only a change to the *set* of marker names may
+    re-render.
+
+    The edit deliberately keeps the same markers (adds an unrelated param), so
+    a re-render here is pure loss. Typing into the paste box itself cannot
+    trigger this listener — it only watches the request fields.
+    """
+    page.fill("#iurl", "https://target.example/login?u=§user§&p=§pass§")
+    page.wait_for_timeout(250)
+    page.click("#i-mode-pitch")
+    page.wait_for_timeout(600)
+    page.click('[data-pfpaste="user"]')
+    page.wait_for_timeout(300)
+    page.fill('[data-pftextarea="user"]', "typed words")
+
+    # Edit the request without changing which markers exist.
+    page.fill("#iurl", "https://target.example/login?u=§user§&p=§pass§&extra=1")
+    page.wait_for_timeout(900)   # longer than the debounce
+
+    assert page.is_visible('[data-pfpbox="user"]'), "an unrelated edit closed the box"
+    assert page.input_value('[data-pftextarea="user"]') == "typed words"
+
+
+# ── the results viewer: navigation and readable width ───────────────
+
+def test_view_modal_steps_through_results(page):
+    run_attack(page)
+    page.click("#iresb [data-rview]")
+    page.wait_for_timeout(400)
+    meta = text(page, "#ires-modal-meta")
+    assert f"1 / {len(USERNAMES)}" in meta, meta
+    assert "admin" in meta, meta
+
+    page.click("#ires-next")
+    page.wait_for_timeout(300)
+    meta = text(page, "#ires-modal-meta")
+    assert f"2 / {len(USERNAMES)}" in meta, meta
+    assert "bob" in meta, meta
+    assert "username=bob" in page.input_value("#ires-modal-req")
+
+
+def test_view_modal_prev_disabled_on_first_next_on_last(page):
+    run_attack(page)
+    page.click("#iresb [data-rview]")
+    page.wait_for_timeout(400)
+    assert page.is_disabled("#ires-prev"), "Prev enabled on the first result"
+    assert not page.is_disabled("#ires-next")
+    for _ in range(len(USERNAMES) - 1):
+        page.click("#ires-next")
+        page.wait_for_timeout(120)
+    assert page.is_disabled("#ires-next"), "Next enabled on the last result"
+    assert not page.is_disabled("#ires-prev")
+
+
+def test_view_modal_navigation_follows_the_filter(page):
+    """Prev/Next must walk the rows on SCREEN, not the full result set.
+
+    Injected with a hidden row *between* two visible ones, so using the
+    unfiltered list for navigation would step into a row the filter excluded —
+    where the position indicator has nothing to show and both buttons lock up.
+    """
+    page.evaluate("""() => showRes([
+      {id: 9001, payload: 'first', url: 'https://t/?u=first', response_code: 200,
+       response_body: 'aaa'},
+      {id: 9002, payload: 'hidden', url: 'https://t/?u=hidden', response_code: 302,
+       response_body: 'bbbb'},
+      {id: 9003, payload: 'third', url: 'https://t/?u=third', response_code: 200,
+       response_body: 'ccccc'},
+    ])""")
+    page.wait_for_timeout(300)
+    page.select_option("#ires-status", "2")
+    page.wait_for_timeout(400)
+    assert row_payloads(page) == ["first", "third"], row_payloads(page)
+
+    page.click('#iresb [data-rview]')
+    page.wait_for_timeout(400)
+    assert "1 / 2" in text(page, "#ires-modal-meta"), text(page, "#ires-modal-meta")
+
+    page.click("#ires-next")
+    page.wait_for_timeout(300)
+    meta = text(page, "#ires-modal-meta")
+    assert "2 / 2" in meta, meta
+    assert "third" in meta, meta
+    assert page.is_disabled("#ires-next"), "stepped past the filtered set"
+
+
+def test_view_modal_response_takes_the_full_phone_width(page):
+    """Two side-by-side panes at 412px leave ~180px each, which is unreadable
+    for an HTML body."""
+    run_attack(page)
+    page.click("#iresb [data-rview]")
+    page.wait_for_timeout(400)
+    box = page.eval_on_selector("#ires-modal-res", """el => {
+        const r = el.getBoundingClientRect();
+        return {w: r.width, h: r.height, vw: window.innerWidth};
+    }""")
+    assert box["w"] > box["vw"] * 0.75, box
+    assert box["h"] > 150, box
+
+
+def test_view_modal_arrow_keys_step_and_escape_closes(page):
+    run_attack(page)
+    page.click("#iresb [data-rview]")
+    page.wait_for_timeout(400)
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(300)
+    assert "2 /" in text(page, "#ires-modal-meta")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    assert not page.is_visible("#ires-modal.open")
+
+
+def test_identical_urls_are_called_out_as_a_failed_run(page):
+    """101 identical rows look like a finished attack. When every request
+    carried the same URL, the payload was never substituted — say so."""
+    page.evaluate("""() => showRes([
+      {id: 9101, payload: 'a', url: 'https://t/login', response_code: 200, response_body: 'x'},
+      {id: 9102, payload: 'b', url: 'https://t/login', response_code: 200, response_body: 'x'},
+      {id: 9103, payload: 'c', url: 'https://t/login', response_code: 200, response_body: 'x'},
+    ])""")
+    page.wait_for_timeout(300)
+    hint = text(page, "#ires-hint")
+    assert "same URL" in hint, hint
+    assert "no payload was substituted" in hint, hint
+
+
+def test_substituted_urls_do_not_trigger_the_warning(page):
+    """The warning must not cry wolf on a healthy run."""
+    run_attack(page)
+    hint = text(page, "#ires-hint")
+    assert "same URL" not in hint, hint

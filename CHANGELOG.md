@@ -12,6 +12,32 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+### Fixed
+
+- **A wordlist could run with no payload substituted at all.** 101 requests
+  were sent to a single URL, every one identical, and the results table
+  presented it as a finished attack. The marker check existed only in the
+  browser, so a page loaded before an upgrade — which sends only a request ID —
+  fell back to the stored capture and bypassed it entirely. The server now
+  refuses a request with no `§markers§` (URL, body, header names or values),
+  where a stale page cannot skip it.
+- **The results table now calls out an identical-URL run.** A line under the
+  toolbar reads *"All N requests sent the same URL — no payload was substituted,
+  so the wordlist was ignored."* A table of identical rows is otherwise very
+  easy to read as a successful attack.
+- **Pitchfork's empty state promised rows that never appeared.** It said "add
+  some … and they appear here", but rows were only rebuilt on a mode switch, so
+  adding a marker did nothing and the mode looked broken. Editing the request
+  now refreshes them, debounced, and only when the *set* of marker names
+  changes — so an unrelated edit cannot close an open paste box or discard a
+  half-typed list. **To Intruder** refreshes them too.
+- **The results viewer could not show a full body on a phone.** Two panes side
+  by side at 412px left roughly 180px each, which is unreadable for HTML. They
+  now stack with the response taking most of the height. Added **‹ Prev** /
+  **Next ›** and the ← / → keys to step through results without closing the
+  modal; navigation follows the current sort and filters, so with **only size
+  outliers** ticked it visits just the outliers.
+
 ## [0.8.2] — 2026-10-17
 
 ### Added

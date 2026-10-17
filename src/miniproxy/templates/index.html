@@ -188,6 +188,15 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
   .res-tools{padding:8px 12px;gap:8px}
   .res-tools label{flex:1 1 44%}
   .res-tools select{flex:1}
+  /* The results viewer: two side-by-side panes at 412px leave roughly 180px
+     each, which is unreadable for an HTML body. Stack them and give the
+     response the bulk of the height. */
+  #ires-modal .rep-split{flex-direction:column;min-height:0}
+  #ires-modal .rep-split .col{min-height:0}
+  #ires-modal .rep-split textarea{min-height:80px}
+  #ires-modal .rep-split .col:last-child{flex:3}
+  #ires-modal .modal-header{flex-wrap:wrap;gap:6px}
+  #ires-modal .modal-header .ml-auto{width:100%;justify-content:flex-end}
 }
 
 /* ── Body viewers (Pretty / Raw / Hex) ───────────────────────────── */
@@ -906,6 +915,8 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
       <span>Response</span>
       <span class="text-sm text-muted" id="ires-modal-meta"></span>
       <div class="ml-auto">
+        <button class="btn btn-sm" id="ires-prev" title="Previous result (←)">‹ Prev</button>
+        <button class="btn btn-sm" id="ires-next" title="Next result (→)">Next ›</button>
         <button class="btn btn-sm" id="ires-modal-close">Close (Esc)</button>
       </div>
     </div>
@@ -2370,6 +2381,9 @@ function applyIntruderRequest(id) {
   document.getElementById("ihed").value = fmtH(e.headers);
   document.getElementById("ibod").value = e.body || "";
   document.getElementById("ires").style.display = "none";
+  // Setting .value does not fire an `input` event, so the pitchfork rows would
+  // otherwise keep describing the previous request.
+  if (iState.mode === "pitchfork") renderPitchRows();
 }
 document.getElementById("isel-btn").addEventListener("click", () => openPicker("intruder"));
 document.getElementById("rsel-btn").addEventListener("click", () => openPicker("repeater"));
@@ -2382,6 +2396,14 @@ document.addEventListener("keydown", ev => {
     pickModal.classList.remove("open");
     document.getElementById("ires-modal").classList.remove("open");
     closeRowMenu();
+  }
+  // Step through results with the arrow keys. Skipped while a field has focus
+  // so the arrows keep scrolling the body they are pointed at.
+  const resModal = document.getElementById("ires-modal");
+  if (resModal.classList.contains("open") &&
+      !(ev.target.closest && ev.target.closest("textarea,input,select"))) {
+    if (ev.key === "ArrowLeft") { ev.preventDefault(); stepResult(-1); }
+    if (ev.key === "ArrowRight") { ev.preventDefault(); stepResult(1); }
   }
 });
 ["pk-method", "pk-status", "pk-host"].forEach(id =>
@@ -2534,9 +2556,34 @@ function currentPlaceholders() {
   });
   return Array.from(names).sort();
 }
+
+// Pitchfork rows are *derived* from the markers in the request, so editing the
+// request has to update them. This used to run only on a mode switch: the
+// empty state said "add some ... and they appear here", and then nothing
+// appeared, because no listener existed to notice the edit. You had to toggle
+// Single list → Pitchfork to shake the rows loose.
+//
+// Debounced, and only re-rendered when the *set* of names changes: rendering
+// on every keystroke would close an open paste box and steal focus mid-word.
+let pfNames = [];
+let pfRefreshTimer = null;
+["iurl", "ibod", "ihed"].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener("input", () => {
+    if (iState.mode !== "pitchfork") return;
+    clearTimeout(pfRefreshTimer);
+    pfRefreshTimer = setTimeout(() => {
+      const now = currentPlaceholders();
+      if (now.join("\u0000") === pfNames.join("\u0000")) return;
+      renderPitchRows();
+    }, 350);
+  });
+});
 async function renderPitchRows() {
   const box = document.getElementById("pf-lists");
   const names = currentPlaceholders();
+  pfNames = names.slice();  // what the debounced listener compares against
   // Keep any words the user already chose for a placeholder that still exists.
   Object.keys(iState.pitch).forEach(k => { if (names.indexOf(k) < 0) delete iState.pitch[k]; });
   names.forEach(n => {
@@ -2786,7 +2833,8 @@ document.getElementById("istart").addEventListener("click", async () => {
 // Before this, the only way to inspect a response was an alert() and the only
 // thing the table offered was an unordered list, so finding the outlier meant
 // squinting at every row.
-let ires = { rows: [], sort: "orig", status: "", outlier: false, sel: [], selectable: false };
+let ires = { rows: [], sort: "orig", status: "", outlier: false, sel: [],
+             selectable: false, modalId: null };
 
 const resLen = r => (r.response_body || "").length;
 
@@ -2844,7 +2892,16 @@ function renderIntruderResults() {
 
   const base = ires.outlier ? modalResponseLen(ires.rows) : null;
   const hint = document.getElementById("ires-hint");
-  if (!total) {
+  // A run where every request carried the same URL means the payload was never
+  // substituted — the wordlist was silently ignored. That is invisible when
+  // you are scanning a table of 101 identical rows, so say it outright rather
+  // than letting it read as a finished attack.
+  const allSameUrl = total > 1 && new Set(ires.rows.map(r => r.url)).size === 1;
+  if (allSameUrl) {
+    hint.textContent = "All " + total + " requests sent the same URL — no " +
+      "payload was substituted, so the wordlist was ignored. Put §markers§ " +
+      "where the payload should go.";
+  } else if (!total) {
     hint.textContent = "";
   } else if (!ires.selectable) {
     hint.textContent = "These responses were not saved to the database, so " +
@@ -2910,14 +2967,42 @@ function toggleResultSel(id) {
 function openResultModal(id) {
   const r = ires.rows.find(x => x.id === id);
   if (!r) return;
-  document.getElementById("ires-modal-meta").textContent =
-    r.payload + "  ·  status " + r.response_code + "  ·  " + resLen(r) + " chars";
-  document.getElementById("ires-modal-req").value =
-    r.method + " " + r.url + "\n\n" + (r.body || "(no request body)");
-  document.getElementById("ires-modal-res").value = r.response_body || "(empty)";
+  ires.modalId = id;
+  paintResultModal();
   document.getElementById("ires-modal").classList.add("open");
 }
 
+// Prev/Next walk the rows currently *on screen*, so they follow your sort and
+// filters — with "only size outliers" on, stepping visits just the outliers
+// instead of making you page through everything you already ruled out.
+function paintResultModal() {
+  const r = ires.rows.find(x => x.id === ires.modalId);
+  if (!r) return;
+  const shown = visibleResults();
+  const at = shown.findIndex(x => x.id === ires.modalId);
+  const pos = at < 0 ? "" : (at + 1) + " / " + shown.length + " · ";
+  document.getElementById("ires-modal-meta").textContent =
+    pos + r.payload + "  ·  status " + r.response_code +
+    "  ·  " + resLen(r) + " chars";
+  document.getElementById("ires-modal-req").value =
+    r.method + " " + r.url + "\n\n" + (r.body || "(no request body)");
+  document.getElementById("ires-modal-res").value = r.response_body || "(empty)";
+  document.getElementById("ires-prev").disabled = at <= 0;
+  document.getElementById("ires-next").disabled = at < 0 || at >= shown.length - 1;
+}
+
+function stepResult(delta) {
+  const shown = visibleResults();
+  const at = shown.findIndex(x => x.id === ires.modalId);
+  if (at < 0) return;
+  const next = shown[at + delta];
+  if (!next) return;
+  ires.modalId = next.id;
+  paintResultModal();
+}
+
+document.getElementById("ires-prev").addEventListener("click", () => stepResult(-1));
+document.getElementById("ires-next").addEventListener("click", () => stepResult(1));
 document.getElementById("ires-modal-close").addEventListener("click", () =>
   document.getElementById("ires-modal").classList.remove("open"));
 document.getElementById("ires-sort").addEventListener("change", e => {

@@ -269,6 +269,7 @@ class TestBackgroundIntruder:
         client, db, _ = app_client
         r = client.post("/api/intruder/start",
                         json={"request_id": 1,
+                              "base": {"url": "https://api.test/u?name=§u§"},
                               "wordlist": ["aa", "bb", "cc", "dd"]})
         assert r.status_code == 202 and r.get_json()["started"]
 
@@ -300,10 +301,14 @@ class TestBackgroundIntruder:
 
         monkeypatch.setattr(Intruder, "_send", slow_send)
         r = client.post("/api/intruder/start",
-                        json={"request_id": 1, "wordlist": ["a", "b"]})
+                        json={"request_id": 1,
+                              "base": {"url": "https://api.test/u?name=§u§"},
+                              "wordlist": ["a", "b"]})
         assert r.status_code == 202
         r2 = client.post("/api/intruder/start",
-                         json={"request_id": 1, "wordlist": ["c"]})
+                         json={"request_id": 1,
+                              "base": {"url": "https://api.test/u?name=§u§"},
+                              "wordlist": ["c"]})
         assert r2.status_code == 409
         gate.set()
         for _ in range(100):
@@ -339,6 +344,7 @@ class TestBackgroundIntruder:
         client, _, _ = app_client
         r = client.post("/api/intruder/start", json={
             "request_id": 1, "mode": "pitchfork",
+            "base": {"url": "https://api.test/l?user=§user§&pass=§pass§"},
             "lists": {"user": ["a", "b"], "pass": ["1", "2", "3"]},
         })
         assert r.status_code == 202

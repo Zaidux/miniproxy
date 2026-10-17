@@ -257,7 +257,7 @@ def _start_and_wait(client, payload, timeout=5.0):
 
 def test_edited_url_overrides_the_stored_capture(app_client, monkeypatch):
     client, db, appmod = app_client
-    cap = db.store_request(method="GET", url="https://stored/original?u=1",
+    cap = db.store_request(method="GET", url="https://stored/original?u=§user§",
                            headers={}, body="")
     seen = {}
     _spy(appmod, monkeypatch, seen)
@@ -276,36 +276,100 @@ def test_edited_url_overrides_the_stored_capture(app_client, monkeypatch):
 def test_omitted_base_falls_back_to_the_stored_capture(app_client, monkeypatch):
     """Older clients send only request_id; that path must keep working."""
     client, db, appmod = app_client
-    cap = db.store_request(method="GET", url="https://stored/original?u=1",
+    cap = db.store_request(method="GET", url="https://stored/original?u=§user§",
                            headers={}, body="")
     seen = {}
     _spy(appmod, monkeypatch, seen)
     _start_and_wait(client, {"request_id": cap, "wordlist": ["a"]})
-    assert seen.get("url") == "https://stored/original?u=1", seen
+    assert seen.get("url") == "https://stored/original?u=§user§", seen
 
 
 def test_empty_url_override_does_not_blank_the_capture(app_client, monkeypatch):
     """A cleared URL field must not produce a request with no URL."""
     client, db, appmod = app_client
-    cap = db.store_request(method="GET", url="https://stored/x?u=1",
+    cap = db.store_request(method="GET", url="https://stored/x?u=§user§",
                            headers={}, body="")
     seen = {}
     _spy(appmod, monkeypatch, seen)
     _start_and_wait(client, {"request_id": cap,
                              "base": {"url": "   ", "headers": {}},
                              "wordlist": ["a"]})
-    assert seen.get("url") == "https://stored/x?u=1", seen
+    assert seen.get("url") == "https://stored/x?u=§user§", seen
 
 
 def test_headers_can_be_cleared_deliberately(app_client, monkeypatch):
     """Clearing headers is different from omitting them."""
     client, db, appmod = app_client
-    cap = db.store_request(method="GET", url="https://stored/y?u=1",
+    cap = db.store_request(method="GET", url="https://stored/y?u=§user§",
                            headers={}, body="")
     seen = {}
     _spy(appmod, monkeypatch, seen)
     _start_and_wait(client, {"request_id": cap,
-                             "base": {"url": "https://edited/z", "headers": {}},
+                             "base": {"url": "https://edited/z?u=§user§", "headers": {}},
                              "wordlist": ["a"]})
-    assert seen.get("url") == "https://edited/z", seen
+    assert seen.get("url") == "https://edited/z?u=§user§", seen
     assert seen.get("headers") == {}, seen
+
+
+# ── a request with nothing to substitute into is refused ────────────
+#
+# The dashboard checks this before starting, but a client-side guard cannot
+# protect against a page loaded before an upgrade: old JavaScript sends only
+# `request_id`, the server falls back to the stored capture, and a capture
+# with no marker produced 101 byte-identical requests that looked exactly like
+# a finished attack. This is the same check, enforced server-side.
+
+def test_markerless_request_is_refused(app_client, monkeypatch):
+    client, db, appmod = app_client
+    cap = db.store_request(method="GET", url="https://t/login",
+                           headers={"Cookie": "session=x"}, body="")
+    called = []
+    _spy(appmod, monkeypatch, {})
+    monkeypatch.setattr(appmod, "intruder", type("S", (), {
+        "MAX_WORDS": 1000, "MAX_COMBOS": 10_000,
+        "run_attack": lambda self, b, w, t: called.append(b) or [],
+        "run_pitchfork": lambda self, b, l, t: called.append(b) or [],
+    })())
+    r = client.post("/api/intruder/start",
+                    json={"request_id": cap, "wordlist": ["admin", "bob"]})
+    assert r.status_code == 400, r.get_json()
+    assert "placeholder" in r.get_json()["error"], r.get_json()
+    assert called == [], "an attack was started anyway"
+
+
+def test_pitchfork_with_markers_only_in_one_position_actually_runs(app_client, monkeypatch):
+    """A marker in the URL counts, even with an empty body."""
+    client, db, appmod = app_client
+    cap = db.store_request(method="GET", url="https://t/login", headers={}, body="")
+    seen = {}
+    _spy(appmod, monkeypatch, seen)
+    _start_and_wait(client, {
+        "request_id": cap,
+        "base": {"url": "https://t/login?user=§user§"},
+        "mode": "pitchfork", "lists": {"user": ["a"]},
+    })
+    assert seen.get("url") == "https://t/login?user=§user§", seen
+
+
+def test_marker_in_a_header_counts(app_client, monkeypatch):
+    """_apply_payload substitutes into header names and values too."""
+    client, db, appmod = app_client
+    cap = db.store_request(method="GET", url="https://t/x", headers={}, body="")
+    seen = {}
+    _spy(appmod, monkeypatch, seen)
+    _start_and_wait(client, {
+        "request_id": cap,
+        "base": {"url": "https://t/x", "headers": {"X-Token": "§tok§"}},
+        "wordlist": ["abc"],
+    })
+    assert seen.get("headers") == {"X-Token": "§tok§"}, seen
+
+
+def test_stored_capture_with_markers_is_accepted_without_overrides(app_client, monkeypatch):
+    """The old client path still works when the capture itself has markers."""
+    client, db, appmod = app_client
+    cap = db.store_request(method="GET", url="https://t/l?u=§u§", headers={}, body="")
+    seen = {}
+    _spy(appmod, monkeypatch, seen)
+    _start_and_wait(client, {"request_id": cap, "wordlist": ["a"]})
+    assert seen.get("url") == "https://t/l?u=§u§", seen

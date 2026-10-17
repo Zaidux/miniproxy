@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -85,6 +86,29 @@ MAX_REPEATER_BODY = 50000
 # attack executes in a daemon thread and clients poll /api/intruder/status.
 _intruder_lock = threading.Lock()
 _intruder_job: dict[str, Any] | None = None  # {request_id, running, progress, results, error, started}
+
+# `§name§` — the same marker the substitution engine looks for.
+_MARKER_RE = re.compile(r"§[^§]+§")
+
+
+def _request_has_marker(base: dict[str, Any]) -> bool:
+    """Does this request contain anywhere a payload could be substituted?
+
+    ``_apply_payload`` replaces markers in the URL, the body, and both the
+    names and values of headers, so all four are checked.
+    """
+    parts = [str(base.get("url") or ""), str(base.get("body") or "")]
+    headers = base.get("headers")
+    if isinstance(headers, str):
+        try:
+            headers = json.loads(headers or "{}")
+        except ValueError:
+            headers = {}
+    if isinstance(headers, dict):
+        for name, value in headers.items():
+            parts.append(str(name))
+            parts.append(str(value))
+    return any(_MARKER_RE.search(part) for part in parts)
 
 
 def _run_intruder_job(req_id: int, base: dict,
@@ -942,6 +966,21 @@ def intruder_start():
 
     total = (len(wordlist) if mode != "pitchfork"
              else _combo_total(cleaned))  # type: ignore[arg-type]
+
+    # Refuse a request with nothing to substitute into.
+    #
+    # The dashboard makes the same check before starting, but a client-side
+    # guard cannot protect against a page loaded before an upgrade: old
+    # JavaScript sends only `request_id`, the server falls back to the stored
+    # capture, and a capture with no marker produced 101 byte-identical
+    # requests that looked exactly like a finished attack. Enforce it where it
+    # cannot be skipped.
+    if not _request_has_marker(base):
+        return jsonify({
+            "error": "no §placeholder§ markers in this request — every word "
+                     "would send an identical request. Put §param§ where the "
+                     "payload goes, e.g. /login?user=§user§&pass=§pass§",
+        }), 400
 
     global _intruder_job
     with _intruder_lock:
