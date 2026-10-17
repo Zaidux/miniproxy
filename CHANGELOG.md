@@ -12,6 +12,8 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-10-17
+
 ### Added
 
 - **The Intruder results table can be sorted, filtered, and diffed.** Finding
