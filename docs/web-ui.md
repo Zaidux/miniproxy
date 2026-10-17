@@ -403,15 +403,45 @@ username list crossed with `§pass§` from a password list. The Single list mode
 cannot do it — it can only confirm that `admin` pairs with `admin`.
 
 Switch to Pitchfork and the UI grows **one row per placeholder** it finds in
-the target request. Each row takes a bundled list or your own upload, and the
-line above **Start attack** shows the product before you commit
+the target request. Each row takes a bundled list, a paste, or your own
+upload, and the line above **Start attack** shows the product before you commit
 (`2 lists → 30 requests`). Combinations are capped at 10,000; over that, shrink
 a list.
+
+### Pasting a wordlist
+
+Wordlists live in awkward places — a notes app, a Slack thread, a Burp export,
+a `curl` transcript. Making you save any of that to a file first is pure
+friction, so both wordlist sources take a **paste**:
+
+- **Single list** — a textarea next to the upload box. Parsed live, so the
+  count updates as you type and clearing it clears the list.
+- **Pitchfork** — a **Paste** button per row, which unfolds a box under that
+  row. Press **Use list** to commit (a half-typed list would otherwise change
+  the request product on every keystroke), **Cancel** to discard.
+
+The same text produces the same wordlist whichever way it arrives, which is the
+point — upload and paste share one parser:
+
+- Newlines **and commas** separate words, so both `admin⏎root` and
+  `admin, root` work.
+- **Spaces do not** separate. A payload like `admin' OR '1'='1` stays one
+  request instead of being shredded into three.
+- Blank lines and lines starting with `#` are dropped. Wordlists copied out of
+  blog posts are full of comment headers, and a leading `#` sent as a payload is
+  a wasted request.
+- Lists are capped at 1,000 words. Over the cap the count says what was
+  dropped (`1000 words (pasted, capped from 1199)`) rather than quietly
+  truncating — and it is the capped number that appears in the request total.
+
+Only one source is live at a time, and the label next to the count names it.
+Choosing a bundled card clears a pasted list, and pasting clears the selected
+card, so what is on screen is always what gets sent.
 
 ### Bundled wordlists
 
 Five curated lists ship in the package so a fresh install can attack without
-hunting for a `.txt` first. Pick one with a click, or upload your own:
+hunting for a `.txt` first. Pick one with a click, or paste/upload your own:
 
 | List | For |
 |------|-----|

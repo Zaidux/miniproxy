@@ -272,6 +272,22 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
 .pf-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
 .pf-row input[type=number]{width:88px}
 .pf-lists{display:flex;flex-direction:column;gap:6px}
+/* Paste-a-wordlist: the single box, and the one each pitchfork row unfolds. */
+.wl-paste{min-height:70px}
+.pf-pastebox{display:flex;gap:6px;align-items:flex-start;margin:-2px 0 10px;flex-wrap:wrap}
+.pf-pastebox textarea{flex:1;min-width:170px;min-height:64px}
+.pf-row .pf-src{flex:1}
+/* On a phone a pitchfork row cannot hold four controls side by side — the
+   select and the file input both truncate to "Choose…", which is the one
+   thing you need to be able to read. Stack them instead, keeping the
+   placeholder, its word count and Paste together on the first line. */
+@media (max-width:700px){
+  .pf-row{gap:6px}
+  .pf-row code{order:1;flex:0 0 auto}
+  .pf-row [data-pfinfo]{order:2;flex:1 1 auto;text-align:right}
+  .pf-row [data-pfpaste]{order:3;flex:0 0 auto}
+  .pf-row .pf-src{order:4;flex:1 1 100%}
+}
 
 /* ── Connect tab ─────────────────────────────────────────────────── */
 .connect-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
@@ -559,7 +575,14 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
 
       <div id="i-single">
         <div class="form-row">
-          <label>Upload .txt (one per line, max 1000)</label>
+          <label>Wordlist — paste, upload .txt, or pick a bundled list below</label>
+          <textarea id="ipaste" class="wl-paste" rows="3"
+            placeholder="One word per line, or comma-separated:&#10;admin&#10;root&#10;guest"></textarea>
+          <span class="hint">Lines starting with <code>#</code> are ignored. Spaces inside a word are kept, so payloads like
+            <code>admin' OR '1'='1</code> survive intact.</span>
+        </div>
+        <div class="form-row">
+          <label>or upload a .txt</label>
           <input type="file" id="ifile" accept=".txt">
           <span id="ifinfo" class="text-sm text-muted"></span>
         </div>
@@ -2323,21 +2346,76 @@ document.getElementById("rsend").addEventListener("click", async () => {
 });
 
 // ── intruder tab ─────────────────────────────────────────────────────
-let words = [];
-document.getElementById("ifile").addEventListener("change", function () {
-  if (!this.files || !this.files[0]) { words = []; return; }
-  const r = new FileReader();
-  r.onload = e => {
-    words = e.target.result.split("\n").map(w => w.trim()).filter(w => w.length > 0);
-    document.getElementById("ifinfo").textContent = words.length + " words";
+// One list, one owner. This used to keep the words twice — a bare `words`
+// written only by the file input, and `iState.words` written only by the
+// bundled cards — while the counter read one and "Start attack" read the
+// other. A bundled list would count up and then refuse to start. Single
+// source of truth, and one setter, so every source (paste, upload, bundled)
+// reports itself the same way.
+const WORDLIST_LIMIT = 1000; // matches Intruder.MAX_WORDS
+
+// Split on newlines and commas, never on spaces: payloads legitimately
+// contain spaces ("admin' OR '1'='1"), and a space-separated split would
+// silently shred them into three requests. Drop blanks and `#` comments —
+// wordlists copied out of blog posts are full of them, and a leading `#`
+// sent as a payload is a wasted request.
+function parseWordlistDetailed(text) {
+  const all = String(text == null ? "" : text)
+    .split(/[\n\r,]+/)
+    .map(w => w.trim())
+    .filter(w => w && !w.startsWith("#"));
+  return {
+    words: all.slice(0, WORDLIST_LIMIT),
+    dropped: Math.max(0, all.length - WORDLIST_LIMIT),
   };
+}
+function parseWordlistText(text) { return parseWordlistDetailed(text).words; }
+
+const iState = { mode: "single", words: [], source: "", pitch: {}, catalog: null };
+
+// The single place the word list changes. `label` is what the user is told is
+// driving the attack; `cardName` re-highlights the bundled card, and any other
+// source clears that highlight — a card left looking selected while a pasted
+// list is what actually runs is exactly what hid the old bug.
+function setSingleWords(words, label, cardName) {
+  iState.words = words || [];
+  iState.source = label || "";
+  const info = document.getElementById("ifinfo");
+  if (info) {
+    info.textContent = iState.words.length
+      ? iState.words.length + " words" + (label ? " (" + label + ")" : "")
+      : "";
+  }
+  const cards = document.getElementById("wl-cards");
+  if (cards) {
+    cards.querySelectorAll("[data-wl]").forEach(c => {
+      c.classList.toggle("active", !!cardName && c.dataset.wl === cardName);
+    });
+  }
+  updateIntruderTotal();
+}
+
+// Paste is parsed live — no confirm button, because the count updates as you
+// type and an empty box means an empty list.
+document.getElementById("ipaste").addEventListener("input", function () {
+  const { words, dropped } = parseWordlistDetailed(this.value);
+  // A stale filename in the file box would claim to be the source.
+  const file = document.getElementById("ifile");
+  if (file) file.value = "";
+  setSingleWords(words, dropped ? "pasted, capped from " + (words.length + dropped) : "pasted");
+});
+
+document.getElementById("ifile").addEventListener("change", function () {
+  if (!this.files || !this.files[0]) { setSingleWords([], ""); return; }
+  const name = this.files[0].name;
+  const r = new FileReader();
+  r.onload = e => setSingleWords(parseWordlistText(e.target.result), name);
   r.readAsText(this.files[0]);
 });
 // ── Intruder: single-list vs pitchfork ─────────────────────────────
 // The old engine put one word into every §placeholder§, so a username ×
 // password attack was impossible. Pitchfork gives each named position its own
 // wordlist, which is how most auth labs are solved.
-const iState = { mode: "single", words: [], pitch: {}, catalog: null };
 
 function setIntruderMode(mode) {
   iState.mode = mode;
@@ -2372,7 +2450,9 @@ async function renderPitchRows() {
   const names = currentPlaceholders();
   // Keep any words the user already chose for a placeholder that still exists.
   Object.keys(iState.pitch).forEach(k => { if (names.indexOf(k) < 0) delete iState.pitch[k]; });
-  names.forEach(n => { if (!(n in iState.pitch)) iState.pitch[n] = { list: "", words: [] }; });
+  names.forEach(n => {
+    if (!(n in iState.pitch)) iState.pitch[n] = { list: "", words: [], label: "" };
+  });
   if (!names.length) {
     box.innerHTML = '<div class="empty-note">No §placeholder§ markers in this request yet. ' +
       "Add some (e.g. <code>?user=§user§&amp;pass=§pass§</code>) and they appear here.</div>";
@@ -2390,15 +2470,28 @@ async function renderPitchRows() {
   const opts = '<option value="">— choose a bundled list —</option>' +
     iState.catalog.map(w => '<option value="' + esc(w.name) + '">' +
       esc(w.title) + " · " + w.count + "</option>").join("");
-  box.innerHTML = names.map(n =>
-    '<div class="pf-row" data-pf="' + esc(n) + '">' +
-    "<code>§" + esc(n) + "§</code>" +
-    '<select data-pflist="' + esc(n) + '" style="flex:1">' + opts + "</select>" +
-    '<input type="file" accept=".txt" data-pffile="' + esc(n) + '" style="flex:1">' +
-    '<span class="text-sm text-muted" data-pfinfo="' + esc(n) + '">' +
-    (iState.pitch[n].words.length
-      ? iState.pitch[n].words.length + " words (" + esc(iState.pitch[n].list) + ")"
-      : "0 words") + "</span></div>").join("");
+  box.innerHTML = names.map(n => {
+    const p = iState.pitch[n];
+    const info = p.words.length
+      ? p.words.length + " words (" + esc(p.label || p.list) + ")"
+      : "0 words";
+    return '<div class="pf-row" data-pf="' + esc(n) + '">' +
+      "<code>§" + esc(n) + "§</code>" +
+      '<select class="pf-src" data-pflist="' + esc(n) + '">' + opts + "</select>" +
+      '<input type="file" class="pf-src" accept=".txt" data-pffile="' + esc(n) + '">' +
+      '<button class="btn btn-sm" type="button" data-pfpaste="' + esc(n) + '" ' +
+      'title="Paste a list for this placeholder">Paste</button>' +
+      '<span class="text-sm text-muted" data-pfinfo="' + esc(n) + '">' + info + "</span></div>" +
+      // The paste box lives under its row and starts collapsed: 2×2 pitchfork
+      // is two short lists, and six always-open textareas is a wall of noise.
+      '<div class="pf-pastebox" data-pfpbox="' + esc(n) + '" style="display:none">' +
+      '<textarea data-pftextarea="' + esc(n) + '" rows="3" ' +
+      'placeholder="One word per line, or comma-separated"></textarea>' +
+      '<div style="display:flex;flex-direction:column;gap:6px">' +
+      '<button class="btn btn-sm btn-primary" type="button" data-pfuse="' + esc(n) + '">Use list</button>' +
+      '<button class="btn btn-sm" type="button" data-pfcancel="' + esc(n) + '">Cancel</button>' +
+      "</div></div>";
+  }).join("");
   // Re-apply the chosen list so a re-render (e.g. after adding a marker) does
   // not silently reset a row the user already configured.
   names.forEach(n => {
@@ -2408,18 +2501,11 @@ async function renderPitchRows() {
   box.querySelectorAll("[data-pflist]").forEach(sel => {
     sel.addEventListener("change", async () => {
       const name = sel.dataset.pflist;
-      if (!sel.value) {
-        iState.pitch[name] = { list: "", words: [] };
-        updateIntruderTotal();
-        return;
-      }
+      if (!sel.value) { applyPitchList(name, [], ""); return; }
       const { data } = await api("/api/wordlists?name=" + encodeURIComponent(sel.value));
       if (!data || !data.wordlists || !data.wordlists.length) return;
       const wl = data.wordlists[0];
-      iState.pitch[name] = { list: wl.name, words: wl.words };
-      const info = box.querySelector('[data-pfinfo="' + CSS.escape(name) + '"]');
-      if (info) info.textContent = wl.words.length + " words (" + wl.title + ")";
-      updateIntruderTotal();
+      applyPitchList(name, wl.words, wl.title, wl.name);
     });
   });
   box.querySelectorAll("[data-pffile]").forEach(inp => inp.addEventListener("change", ev => {
@@ -2427,16 +2513,71 @@ async function renderPitchRows() {
     const f = ev.target.files && ev.target.files[0];
     if (!f) return;
     const r = new FileReader();
-    r.onload = e => {
-      const words = String(e.target.result || "").split("\n")
-        .map(x => x.trim()).filter(x => x && !x.startsWith("#"));
-      iState.pitch[name] = { list: f.name, words: words.slice(0, 1000) };
-      const info = box.querySelector('[data-pfinfo="' + CSS.escape(name) + '"]');
-      if (info) info.textContent = words.length + " words (uploaded)";
-      updateIntruderTotal();
-    };
+    r.onload = e => applyPitchList(name, parseWordlistText(e.target.result), "uploaded");
     r.readAsText(f);
   }));
+  // Paste, per row. Committed with "Use list" rather than live, because a
+  // half-typed list would otherwise change the request product on every
+  // keystroke and re-render the totals under the user's hands.
+  box.querySelectorAll("[data-pfpaste]").forEach(btn => btn.addEventListener("click", () => {
+    const name = btn.dataset.pfpaste;
+    const holder = box.querySelector('[data-pfpbox="' + CSS.escape(name) + '"]');
+    if (!holder) return;
+    const ta = holder.querySelector("textarea");
+    // Seed with the words this row already holds, so pasting over a bundled
+    // list starts from what is there instead of an empty box.
+    if (!ta.value && iState.pitch[name] && iState.pitch[name].words.length) {
+      ta.value = iState.pitch[name].words.join("\n");
+    }
+    holder.style.display = "";
+    ta.focus();
+  }));
+  box.querySelectorAll("[data-pfuse]").forEach(btn => btn.addEventListener("click", () => {
+    const name = btn.dataset.pfuse;
+    const holder = box.querySelector('[data-pfpbox="' + CSS.escape(name) + '"]');
+    if (!holder) return;
+    const ta = holder.querySelector("textarea");
+    const { words, dropped } = parseWordlistDetailed(ta.value);
+    applyPitchList(name, words,
+      dropped ? "pasted, capped from " + (words.length + dropped) : "pasted");
+    holder.style.display = "none";
+    ta.value = "";
+  }));
+  box.querySelectorAll("[data-pfcancel]").forEach(btn => btn.addEventListener("click", () => {
+    const holder = box.querySelector('[data-pfpbox="' + CSS.escape(btn.dataset.pfcancel) + '"]');
+    if (!holder) return;
+    holder.style.display = "none";
+    holder.querySelector("textarea").value = "";
+  }));
+  updateIntruderTotal();
+}
+
+// One setter for all three row sources, mirroring setSingleWords().
+// `bundledName` is set only for a bundled list; for a paste or an upload it
+// is empty, which also clears the dropdown and the file box so neither keeps
+// claiming to be the source of the words that will be sent.
+function applyPitchList(name, words, label, bundledName) {
+  const box = document.getElementById("pf-lists");
+  const entry = iState.pitch[name] || (iState.pitch[name] = { list: "", words: [], label: "" });
+  entry.list = bundledName || "";
+  entry.label = label || "";
+  entry.words = words || [];
+  if (box) {
+    const info = box.querySelector('[data-pfinfo="' + CSS.escape(name) + '"]');
+    // Report the words actually stored, never the pre-cap count — the old
+    // upload handler said "1199 words" while sending 1000.
+    if (info) {
+      info.textContent = entry.words.length
+        ? entry.words.length + " words (" + entry.label + ")"
+        : "0 words";
+    }
+    if (!bundledName) {
+      const sel = box.querySelector('[data-pflist="' + CSS.escape(name) + '"]');
+      if (sel) sel.value = "";
+      const fi = box.querySelector('[data-pffile="' + CSS.escape(name) + '"]');
+      if (fi) fi.value = "";
+    }
+  }
   updateIntruderTotal();
 }
 
@@ -2470,12 +2611,12 @@ async function loadWordlistCards() {
   box.querySelectorAll("[data-wl]").forEach(card => card.addEventListener("click", async () => {
     const { data: d } = await api("/api/wordlists?name=" + encodeURIComponent(card.dataset.wl));
     if (!d || !d.wordlists || !d.wordlists.length) return;
-    iState.words = d.wordlists[0].words;
-    box.querySelectorAll("[data-wl]").forEach(c => c.classList.remove("active"));
-    card.classList.add("active");
-    document.getElementById("ifinfo").textContent =
-      d.wordlists[0].words.length + " words from the bundled “" + d.wordlists[0].title + "” list.";
-    updateIntruderTotal();
+    const wl = d.wordlists[0];
+    // A pasted or uploaded list is no longer what's driving the attack, so the
+    // paste box is cleared rather than left looking like the active source.
+    const paste = document.getElementById("ipaste");
+    if (paste) paste.value = "";
+    setSingleWords(wl.words, wl.title, wl.name);
   }));
 }
 document.getElementById("istart").addEventListener("click", async () => {
@@ -2485,8 +2626,11 @@ document.getElementById("istart").addEventListener("click", async () => {
   // /api/intruder/status for progress instead of blocking the UI.
   let body;
   if (iState.mode === "single") {
-    if (!words.length) { alert("Pick a bundled list or upload a wordlist."); return; }
-    body = { request_id: parseInt(rid, 10), wordlist: words.slice(0, 1000) };
+    if (!iState.words.length) {
+      alert("Paste a wordlist, pick a bundled list, or upload a .txt.");
+      return;
+    }
+    body = { request_id: parseInt(rid, 10), wordlist: iState.words.slice(0, WORDLIST_LIMIT) };
   } else {
     const lists = {};
     Object.keys(iState.pitch).forEach(n => {

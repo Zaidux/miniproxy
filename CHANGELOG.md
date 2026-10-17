@@ -12,6 +12,49 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+### Added
+
+- **Paste a wordlist into the Intruder — no file needed.** Wordlists live in
+  awkward places (a notes app, a Slack thread, a Burp export, a `curl`
+  transcript), and making you save any of that to disk first is pure friction.
+  - **Single list** gets a paste box beside the upload input. It parses live,
+    so the count updates as you type and clearing the box clears the list.
+  - **Pitchfork** gets a **Paste** button per row, unfolding a box under that
+    row. **Use list** commits it, **Cancel** discards it — committing
+    explicitly because a half-typed list would otherwise change the request
+    product on every keystroke.
+- **One shared parser for paste and upload.** The two disagreed: the pitchfork
+  upload skipped `#` comments and the single-list upload did not, so identical
+  text produced a different wordlist depending on which control you used. Both
+  now take the same rules:
+  - Newlines **and commas** separate words — pasted lists rarely arrive
+    one-per-line.
+  - **Spaces do not** separate. `admin' OR '1'='1` stays one request instead of
+    being shredded into three.
+  - Blank lines and `#` comment lines are dropped, the rule
+    `wordlists.load_from_file` has always documented (though nothing currently
+    calls it — the parsing now lives in the dashboard).
+  - Capped at 1,000, and over the cap the count reports what was dropped
+    (`1000 words (pasted, capped from 1199)`) rather than truncating quietly.
+
+### Fixed
+
+- **A bundled wordlist counted up and then refused to start.** The word list was
+  held in two variables: a bare `words` written only by the file input, and
+  `iState.words` written only by the bundled cards. The request counter read
+  the second and **Start attack** read the first — so clicking a bundled card
+  showed a correct count and then alerted *"Pick a bundled list or upload a
+  wordlist"*, while an uploaded file showed no count at all. There is now a
+  single source of truth with one setter, and it names the active source
+  (`3 words (pasted)`).
+- **The pitchfork upload handler lied about list size.** It printed the
+  pre-cap count — *"1199 words"* — while storing the capped 1000. The count on
+  screen no longer describes the attack it is about to run.
+- **Inactive wordlist sources are cleared instead of lingering.** Choosing a
+  bundled card clears the paste box, and pasting clears the selected card. A
+  control still showing text while a different list is what actually gets sent
+  is the same shape of lie as the two-variable bug above.
+
 ## [0.8.0] — 2026-10-16
 
 Diff, Noise and Rewrite are top-level tabs.

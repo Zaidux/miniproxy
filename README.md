@@ -158,6 +158,7 @@ Tools that ignore proxy env vars can usually be pointed explicitly (`curl -x`, `
 - **Repeater** — persistent tabs with per-tab send history, auto-saving edits, and an optional **follow redirects** so you can see where a 302 lands.
 - **Intruder** — `§param§` fuzzing in two modes: one wordlist into every position, or **pitchfork** (a different list per position — usernames × passwords, which is how auth labs are actually solved).
 - **Bundled wordlists** — IDs, usernames, passwords, parameter names, ports, paths. No `.txt` hunting on a fresh install.
+- **Paste a wordlist** — no file needed. Single list takes a live-updating paste box; every pitchfork row has its own. Newline- or comma-separated, `#` comments ignored, spaces kept so payloads like `admin' OR '1'='1` survive.
 - **Match & replace** — rewrite headers, query params or bodies on requests as they pass through the proxy.
 
 Captures persist across refreshes and restarts until you click
