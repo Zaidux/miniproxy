@@ -12,6 +12,8 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-10-17
+
 ### Added
 
 - **Paste a wordlist into the Intruder — no file needed.** Wordlists live in
