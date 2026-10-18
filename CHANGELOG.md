@@ -12,6 +12,36 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-18
+
+### Added
+
+- **Attacks keep running when you leave, and resume after a restart.** The work
+  queue (base request + every payload combination) is now persisted with the
+  job, and results are written every ten requests instead of only at the end.
+  - Closing the tab or the browser no longer matters: the run is a server-side
+    job, not something the page drives.
+  - Reloading the dashboard **reattaches** to the running job — progress and
+    the results collected so far come back from the database.
+  - A dashboard restart, or a reboot, **resumes** from the last flushed batch
+    rather than losing the attack or starting over.
+  - **Stop attack** cancels a run but keeps everything already collected.
+  - New endpoints: `GET /api/intruder/status` (now DB-backed),
+    `GET /api/intruder/jobs/<id>`, `POST /api/intruder/cancel`.
+- **`{{name}}` works as a marker alias for `§name§`**, everywhere: the editor,
+  the guard that refuses marker-less attacks, pitchfork row detection, the API
+  and stored captures. `§` cannot be typed on a phone keyboard (or into a
+  browser address bar), which made the documented syntax effectively
+  unusable on mobile — this was the real reason attacks kept failing with "no
+  markers".
+
+### Fixed
+
+- **The dashboard template is served through Jinja, so a literal `{{name}}` in
+  it was parsed as a Jinja expression** and the whole page returned 500. The
+  template contains no Jinja directives, so it is now wrapped in a raw block —
+  which also means any future use of Jinja in it needs that block removed.
+
 ## [0.8.4] — 2026-10-18
 
 ### Fixed
@@ -23,8 +53,6 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
   as did `exclude_host`. The match now covers the host, the host with a port, a
   subdomain, and a subdomain with a port. Caught by smoking the installed
   wheel, not by the suite: no existing test used a URL with a port.
-
-## [0.8.3] — 2026-10-18
 
 ## [0.8.3] — 2026-10-18
 

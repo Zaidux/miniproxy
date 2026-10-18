@@ -7,6 +7,18 @@ from typing import Any
 import requests
 
 
+# `§` is the documented marker, but it is painful to type on a phone keyboard
+# and cannot be typed into a browser address bar at all. `{{name}}` is accepted
+# as an alias and normalised before anything looks for markers, so both forms
+# behave identically everywhere (dashboard, API, stored captures).
+_ALIAS_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+
+
+def normalize_markers(text: str) -> str:
+    """Rewrite ``{{name}}`` aliases as ``§name§``."""
+    return _ALIAS_RE.sub(lambda m: "§" + m.group(1) + "§", str(text or ""))
+
+
 class IntruderError(Exception):
     """Raised when the intruder encounters a fatal error."""
 
@@ -27,7 +39,7 @@ class Intruder:
     def find_placeholders(text: str) -> list[str]:
         """Return list of unique placeholder names found in text (content between §)."""
         matches: set[str] = set()
-        for m in re.finditer(r"§([^§]+)§", text):
+        for m in re.finditer(r"§([^§]+)§", normalize_markers(text)):
             matches.add(m.group(1))
         return sorted(matches)
 
@@ -35,7 +47,7 @@ class Intruder:
     def positions_of(text: str) -> dict[str, int]:
         """How many times each placeholder name occurs."""
         counts: dict[str, int] = {}
-        for m in re.finditer(r"§([^§]+)§", text):
+        for m in re.finditer(r"§([^§]+)§", normalize_markers(text)):
             counts[m.group(1)] = counts.get(m.group(1), 0) + 1
         return counts
 
@@ -70,7 +82,7 @@ class Intruder:
             name = match.group(1)
             return by_name.get(name, shared)
 
-        return re.sub(r"§([^§]+)§", _sub, text)
+        return re.sub(r"§([^§]+)§", _sub, normalize_markers(text))
 
     def run_attack(
         self,
@@ -97,15 +109,59 @@ class Intruder:
         """
         if len(wordlist) > self.MAX_WORDS:
             raise IntruderError(f"Wordlist too large (max {self.MAX_WORDS} words)")
+        return self.run_items(base_request, self.build_items_single(wordlist),
+                              target_id)
 
+    # ── Work items ────────────────────────────────────────────────────
+    # An attack is a flat list of items, each describing one request. The
+    # dashboard persists that list with the job, so a run can be stopped after
+    # any item and continued from exactly there — by the browser reattaching,
+    # or by the dashboard after a restart.
+
+    def build_items_single(self, wordlist: list[str]) -> list[dict[str, Any]]:
+        return [{"word": w, "payloads": None, "label": w} for w in wordlist]
+
+    def build_items_pitchfork(
+        self, lists: dict[str, list[str]],
+    ) -> list[dict[str, Any]]:
+        from itertools import product
+
+        usable = {k: v for k, v in lists.items() if v}
+        if not usable:
+            raise IntruderError("pitchfork needs at least one wordlist")
+        combos = 1
+        for size in (len(v) for v in usable.values()):
+            combos *= size
+        if combos > self.MAX_COMBOS:
+            raise IntruderError(
+                f"pitchfork would send {combos} requests "
+                f"(max {self.MAX_COMBOS}) — shrink a list"
+            )
+        names = list(usable)
+        items = []
+        for combo in product(*(usable[n] for n in names)):
+            payloads = dict(zip(names, combo))
+            items.append({
+                "word": "",
+                "payloads": payloads,
+                "label": " | ".join(f"{n}={v}" for n, v in payloads.items()),
+            })
+        return items
+
+    def run_items(self, base_request: dict[str, Any],
+                  items: list[dict[str, Any]],
+                  target_id: int) -> list[dict[str, Any]]:
+        """Send one request per item. Never raises for a single bad item."""
         results: list[dict[str, Any]] = []
-        for word in wordlist:
-            modified = self._apply_payload(base_request, word)
+        for item in items:
+            modified = self._apply_payload(
+                base_request, item.get("word") or "", item.get("payloads"))
             outcome = self._send(modified)
-            outcome["payload"] = word
+            outcome["payload"] = item.get("label") or item.get("word") or ""
+            if item.get("payloads"):
+                outcome["payloads"] = item["payloads"]
             outcome["request_id"] = target_id
             results.append(outcome)
-
         return results
 
     MAX_COMBOS = 10_000
@@ -127,37 +183,8 @@ class Intruder:
         about: a pitchfork of ``?user=§user§&pass=§pass§`` with only ``user``
         configured sends ``?user=admin&pass=``.
         """
-        from itertools import product
-
-        usable = {k: v for k, v in lists.items() if v}
-        if not usable:
-            raise IntruderError("pitchfork needs at least one wordlist")
-
-        sizes = [len(v) for v in usable.values()]
-        combos = 1
-        for size in sizes:
-            combos *= size
-        if combos > self.MAX_COMBOS:
-            raise IntruderError(
-                f"pitchfork would send {combos} requests "
-                f"(max {self.MAX_COMBOS}) — shrink a list"
-            )
-
-        names = list(usable)
-        results: list[dict[str, Any]] = []
-        for combo in product(*(usable[n] for n in names)):
-            payloads = dict(zip(names, combo))
-            modified = self._apply_payload(base_request, "", payloads)
-            outcome = self._send(modified)
-            # A readable label beats "a×b" — this string is what the results
-            # table groups and searches by.
-            outcome["payload"] = " | ".join(
-                f"{n}={v}" for n, v in payloads.items()
-            )
-            outcome["payloads"] = payloads
-            outcome["request_id"] = target_id
-            results.append(outcome)
-        return results
+        return self.run_items(base_request,
+                              self.build_items_pitchfork(lists), target_id)
 
     def _apply_payload(
         self, base: dict[str, Any], payload: str,

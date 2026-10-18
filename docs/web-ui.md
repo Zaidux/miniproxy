@@ -387,6 +387,9 @@ those hosts is skipped at capture time.
 | `PATCH /api/logs/<id>` | set `highlight` and/or `note` |
 | `GET /api/diff/<a>/<b>` | compare two captures (`?mode=json\|token\|char`) |
 | `GET /api/diff/intruder/<a>/<b>` | compare two Intruder results, same engine |
+| `GET /api/intruder/status` | the running or most recent attack: progress + results so far |
+| `GET /api/intruder/jobs/<id>` | one attack by id, with everything it has produced |
+| `POST /api/intruder/cancel` | stop the running attack, keeping collected results |
 | `GET /api/repeater/tabs` | repeater tabs (+ `history` per tab) |
 | `GET /api/rewrite` | match & replace rules |
 | `GET /api/wordlists` | the bundled wordlists |

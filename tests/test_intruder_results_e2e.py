@@ -553,7 +553,12 @@ def test_starting_without_a_marker_is_refused(page):
     page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
     page.click("#istart")
     page.wait_for_timeout(1200)
-    assert any("placeholder" in d for d in dialogs), dialogs
+    # The dialog now offers the typeable alias first, so match on "marker"
+    # rather than the old "placeholder" wording.
+    assert any("marker" in d.lower() for d in dialogs), dialogs
+    assert any("{{" in d for d in dialogs), (
+        "the refusal does not mention the typeable {{name}} form: " + str(dialogs)
+    )
     assert page.query_selector_all("#iresb tr[data-rid]") == [], "attack ran anyway"
 
 
@@ -850,3 +855,71 @@ def test_clearing_the_last_wordlist_clears_the_product_line(page):
     page.select_option('[data-pflist="user"]', "")
     page.wait_for_timeout(400)
     assert text(page, "#pf-hint").strip() == "", text(page, "#pf-hint")
+
+
+# ── durable attacks: leave the page, come back ──────────────────────
+
+def test_double_brace_markers_work_from_the_editor(page):
+    """`§` is untypeable on a phone keyboard, so {{name}} is an alias. Typing
+    it must create pitchfork rows and run a real attack."""
+    page.fill("#iurl", "https://target.example/login?u={{user}}&p={{pass}}")
+    page.wait_for_timeout(250)
+    page.click("#i-mode-pitch")
+    page.wait_for_timeout(800)
+    rows = page.query_selector_all("#pf-lists .pf-row")
+    assert len(rows) == 2, f"{{{{...}}}} markers produced {len(rows)} rows"
+    labels = page.eval_on_selector_all(
+        "#pf-lists .pf-row code", "els => els.map(e => e.textContent)")
+    assert "§user§" in labels and "§pass§" in labels, labels
+
+
+def test_attack_continues_after_leaving_and_reattaches(page):
+    """Close/reload the page mid-attack: the run is server-side and its queue is
+    persisted, so coming back reattaches instead of losing it."""
+    page.fill("#iurl", "https://target.example/login?username=§user§")
+    page.wait_for_timeout(250)
+    page.fill("#ipaste", "\n".join(f"user{i}" for i in range(40)))
+    page.wait_for_timeout(300)
+    page.click("#istart")
+    page.wait_for_timeout(400)
+
+    # "Leave": a fresh load of the dashboard, as if the tab had been closed.
+    page.reload(wait_until="networkidle")
+    page.wait_for_timeout(1800)
+
+    note = text(page, "#ijob")
+    assert note.strip(), "no job info after reload — the page did not reattach"
+    assert "Attack #" in note, note
+
+    # Either still running (progress visible) or already finished; both must
+    # end with the full result set.
+    for _ in range(60):
+        page.wait_for_timeout(500)
+        if "finished" in text(page, "#ijob"):
+            break
+    assert "finished" in text(page, "#ijob"), text(page, "#ijob")
+    page.click('.tab[data-tab="intruder"]')
+    page.wait_for_timeout(600)
+    assert len(page.query_selector_all("#iresb tr[data-rid]")) == 40
+
+
+def test_results_survive_a_reload_without_rerunning(page):
+    """The table is rebuilt from the database, not from memory — so a reload
+    shows what the attack produced, and does not send anything again."""
+    page.fill("#iurl", "https://target.example/login?username=§user§")
+    page.wait_for_timeout(250)
+    page.fill("#ipaste", "admin\nbob\neve")
+    page.wait_for_timeout(300)
+    page.click("#istart")
+    for _ in range(40):
+        page.wait_for_timeout(300)
+        if "finished" in text(page, "#ijob"):
+            break
+    before = len(page.query_selector_all("#iresb tr[data-rid]"))
+    assert before == 3, before
+
+    page.reload(wait_until="networkidle")
+    page.wait_for_timeout(2000)
+    page.click('.tab[data-tab="intruder"]')
+    page.wait_for_timeout(800)
+    assert len(page.query_selector_all("#iresb tr[data-rid]")) == 3

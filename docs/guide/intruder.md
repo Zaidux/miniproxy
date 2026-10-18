@@ -55,6 +55,12 @@ Authorization: Bearer §token§
 `§` is just a marker character this tool looks for. There is nothing to enable
 and nothing to escape.
 
+**On a phone, use `{{name}}` instead.** The two are interchangeable everywhere —
+`?user={{user}}&pass={{pass}}` behaves exactly like the `§` form. Braces are
+easy to type on any keyboard; `§` is not, and cannot be typed into a browser
+address bar at all. The Intruder rewrites them to the canonical form before
+anything else reads the request.
+
 **You must still pick a captured request first.** The boxes start out filled
 from a capture, and the attack is stored against that request's ID — so pick a
 request, then edit the boxes freely.
@@ -294,6 +300,41 @@ table is populated. If the attack failed, an alert names the error
 - Each request has a 10-second timeout. A timeout is recorded as status `0`.
 - If you close the dashboard tab, the attack continues in the dashboard
   process. If the process exits mid-attack, the run is lost.
+
+## Leaving an attack running
+
+**What it's for.** Big sweeps take minutes. You should not have to sit and watch
+a progress bar with the screen awake.
+
+**How to use it.**
+
+1. Start the attack as usual.
+2. Read the line under **Start attack**: it names the job and its progress, and
+   says the run is safe to leave.
+3. Close the tab, lock the phone, or wander off. The attack is a server-side
+   job, not something the page drives.
+4. Come back — reload the dashboard and open **Intruder**. It reattaches to the
+   job, shows the results collected so far, and keeps updating.
+5. **Stop attack** (next to Start while a run is active) cancels it but keeps
+   everything already collected.
+
+**What survives what.**
+
+| Event | What happens |
+|-------|--------------|
+| You close the browser or leave the page | The attack keeps running |
+| You reload the dashboard | It reattaches, with progress and results so far |
+| The dashboard process restarts | It resumes from the last flushed batch, not from the beginning |
+| The machine reboots | Same: the queue is in the database, so it resumes when the dashboard starts |
+
+Results are written to the database every ten requests, so progress is real and
+a crash costs at most that much. A run is refused only if another one is
+already going — one at a time, deliberately, so two attacks cannot interleave
+their results.
+
+**Note.** An attack targets one host. Leaving it running is fine, but keep an
+eye on rate limits and lockouts: there is no throttle, and resuming does not
+slow it down either.
 
 ## Read the results
 

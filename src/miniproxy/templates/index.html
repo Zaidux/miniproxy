@@ -1,3 +1,4 @@
+{% raw %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -621,8 +622,12 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
 
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
         <button class="btn btn-danger" id="istart">Start attack</button>
+        <button class="btn btn-sm" id="istop" style="display:none">Stop attack</button>
         <span class="text-sm text-muted" id="i-total"></span>
       </div>
+      <!-- Attacks run server-side and their queue is persisted, so this line
+           says they survive leaving the page or closing the browser. -->
+      <div class="hint" id="ijob" style="margin-top:6px"></div>
     </div>
   </div>
   <div class="card" id="ires" style="display:none">
@@ -1251,6 +1256,7 @@ function restoreSession() {
       document.getElementById("filter-highlighted").checked = true;
       document.getElementById("chip-hl").classList.add("on");
     }
+    reattachIntruderJob();
     const sid = parseInt(localStorage.getItem("mp.selected"), 10);
     if (sid) state.selectedId = sid;  // validated once rows load
   } catch (e) { /* storage unavailable — defaults are fine */ }
@@ -2524,6 +2530,15 @@ document.getElementById("rsend").addEventListener("click", async () => {
 // reports itself the same way.
 const WORDLIST_LIMIT = 1000; // matches Intruder.MAX_WORDS
 
+// `§` is the documented marker but is painful to type on a phone and impossible
+// in a browser address bar, so `{{name}}` is accepted as an alias and rewritten
+// before anything looks for markers. The server does the same, so the two forms
+// are interchangeable everywhere.
+function normalizeMarkers(text) {
+  return String(text == null ? "" : text)
+    .replace(/\{\{\s*([^{}]+?)\s*\}\}/g, "\u00a7$1\u00a7");
+}
+
 // Split on newlines and commas, never on spaces: payloads legitimately
 // contain spaces ("admin' OR '1'='1"), and a space-separated split would
 // silently shred them into three requests. Drop blanks and `#` comments —
@@ -2624,7 +2639,7 @@ function currentPlaceholders() {
   ["iurl", "ibod", "ihed"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
-    const found = (el.value || "").match(/§([^§]+)§/g) || [];
+    const found = normalizeMarkers(el.value || "").match(/§([^§]+)§/g) || [];
     found.forEach(f => names.add(f.replace(/§/g, "")));
   });
   return Array.from(names).sort();
@@ -2853,17 +2868,19 @@ document.getElementById("istart").addEventListener("click", async () => {
   // used to reload the capture and discard every edit.
   const base = {
     method: document.getElementById("imet").value,
-    url: document.getElementById("iurl").value.trim(),
-    headers: parseH(document.getElementById("ihed").value),
-    body: document.getElementById("ibod").value,
+    url: normalizeMarkers(document.getElementById("iurl").value.trim()),
+    headers: parseH(normalizeMarkers(document.getElementById("ihed").value)),
+    body: normalizeMarkers(document.getElementById("ibod").value),
   };
   if (!base.url) { alert("Enter a URL to attack."); return; }
   // Without a marker every request would be byte-identical — 1000 identical
   // requests is 1000 wasted requests and a very confusing result table.
-  if (!/§[^§]+§/.test(base.url + "\n" + JSON.stringify(base.headers) + "\n" + base.body)) {
-    alert("No §placeholder§ markers in this request.\n\n" +
-      "Put §param§ where the payload goes — for example:\n" +
-      "  https://target.com/login?user=§user§&pass=§pass§\n\n" +
+  if (!/§[^§]+§|\{\{[^{}]+\}\}/.test(
+        base.url + "\n" + JSON.stringify(base.headers) + "\n" + base.body)) {
+    alert("No markers in this request.\n\n" +
+      "Put {{param}} (or §param§) where the payload goes — for example:\n" +
+      "  https://target.com/login?user={{user}}&pass={{pass}}\n\n" +
+      "{{...}} is easier to type on a phone.\n" +
       "Otherwise every word produces the exact same request.");
     return;
   }
@@ -2909,22 +2926,85 @@ document.getElementById("istart").addEventListener("click", async () => {
       alert(data.error || "attack failed");
       return;
     }
-    document.getElementById("icnt").textContent = "0 / " + data.total + " requests";
-    const poll = setInterval(async () => {
-      try {
-        const { data: st } = await api("/api/intruder/status");
-        if (st.running) {
-          document.getElementById("icnt").textContent = st.progress + " / " + st.total + " requests";
-          return;
-        }
-        clearInterval(poll);
-        btn.disabled = false; btn.textContent = "Start attack";
-        if (st.error) { alert("Attack failed: " + st.error); return; }
-        showRes(st.results || []);
-        loadIntruderPane();
-      } catch (e) { clearInterval(poll); btn.disabled = false; btn.textContent = "Start attack"; }
-    }, 500);
+    ires.sel = [];
+    attachIntruderJob({ job_id: data.job_id, total: data.total,
+                        progress: 0, running: true, results: [] });
   } catch (e) { btn.disabled = false; btn.textContent = "Start attack"; alert("Failed: " + e.message); }
+});
+
+// ── The running attack: progress, reattach, stop ─────────────────────
+// The queue lives in the database, so the attack does not depend on this page.
+// Closing the browser or leaving the tab lets it finish; coming back reattaches
+// to it, and even a dashboard restart resumes it from the last flushed chunk.
+let ijPoll = null;
+
+function setIntruderRunning(running) {
+  const start = document.getElementById("istart");
+  const stop = document.getElementById("istop");
+  start.disabled = running;
+  start.textContent = running ? "Running…" : "Start attack";
+  stop.style.display = running ? "" : "none";
+}
+
+function attachIntruderJob(st) {
+  clearInterval(ijPoll);
+  if (st && st.request_id != null) {
+    document.getElementById("isel").value = st.request_id;
+    document.getElementById("isel-label").textContent =
+      "attack on request #" + st.request_id;
+  }
+  const paint = (s) => {
+    const note = document.getElementById("ijob");
+    const pct = s.total ? Math.round(100 * (s.progress || 0) / s.total) : 0;
+    if (s.running) {
+      note.textContent = "Attack #" + s.job_id + " running — " +
+        (s.progress || 0) + " / " + s.total + " (" + pct + "%). " +
+        "Safe to leave this page: it keeps running on the server and will " +
+        "still be here when you come back.";
+      document.getElementById("icnt").textContent =
+        (s.progress || 0) + " / " + s.total + " requests";
+    } else if (s.status === "error") {
+      note.textContent = "Attack #" + s.job_id + " failed: " + (s.error || "unknown error");
+    } else if (s.status === "cancelled") {
+      note.textContent = "Attack #" + s.job_id + " stopped at " +
+        (s.progress || 0) + " / " + s.total + ". Results collected so far are below.";
+    } else {
+      note.textContent = "Attack #" + s.job_id + " finished — " +
+        s.total + " requests. Results stay here until you clear captures.";
+    }
+    applyJobResults(s.results || []);
+  };
+  setIntruderRunning(!!st.running);
+  paint(st);
+  if (!st.running) { loadIntruderPane(); return; }
+  ijPoll = setInterval(async () => {
+    try {
+      const { data: s } = await api("/api/intruder/status");
+      if (!s || s.job_id == null) return;
+      paint(s);
+      if (!s.running) {
+        clearInterval(ijPoll);
+        setIntruderRunning(false);
+        loadIntruderPane();
+      }
+    } catch (e) { /* keep polling; a blip must not stop the watch */ }
+  }, 1000);
+}
+
+// Reattach on load: a page opened (or reloaded) mid-attack joins it.
+async function reattachIntruderJob() {
+  try {
+    const { data } = await api("/api/intruder/status");
+    if (data && data.job_id != null) attachIntruderJob(data);
+  } catch (e) { /* nothing running */ }
+}
+
+document.getElementById("istop").addEventListener("click", async () => {
+  if (!window.confirm("Stop this attack? Results collected so far are kept.")) return;
+  const { ok, data } = await api("/api/intruder/cancel", { method: "POST" });
+  if (!ok) { alert(data.error || "could not stop the attack"); return; }
+  clearInterval(ijPoll);
+  setTimeout(reattachIntruderJob, 800);
 });
 // ── Intruder results: sort, filter, outliers, and compare ───────────
 // Reading a few hundred rows for the one that behaved differently is the
@@ -2978,18 +3058,27 @@ function visibleResults() {
 }
 
 function showRes(rr) {
-  document.getElementById("ires").style.display = "block";
-  // __i is the position in send order, kept so the # column still reads
-  // "the 37th request I sent" after sorting instead of renumbering.
   ires.rows = (rr || []).map((r, i) => { r.__i = i + 1; return r; });
   ires.sel = [];
-  // `store_intruder_results` is deliberately wrapped in a bare `except: pass`
-  // so persistence problems never lose the results, but that also means a
-  // schema mismatch can leave rows with no id — and no id means nothing to
-  // diff. Detect that rather than rendering Compare buttons that quietly do
-  // nothing.
   ires.selectable = ires.rows.length > 0 && ires.rows.every(r => r.id != null);
+  document.getElementById("ires").style.display = ires.rows.length ? "block" : "none";
   renderIntruderResults();
+}
+
+// Merge a poll's results without destroying what the user is looking at.
+// showRes resets the sort/filter/selection, which would be wrong on a poll: the
+// rows only ever arrive in send order, so a re-render every two seconds would
+// repeatedly undo the user's sort and clear their A/B picks.
+function applyJobResults(rows) {
+  const before = ires.rows.map(r => r.id).join(",");
+  ires.rows = (rows || []).map((r, i) => { r.__i = i + 1; return r; });
+  ires.selectable = ires.rows.length > 0 && ires.rows.every(r => r.id != null);
+  ires.sel = ires.sel.filter(id => ires.rows.some(r => r.id === id));
+  const after = ires.rows.map(r => r.id).join(",");
+  if (before !== after || ires.rows.length) {
+    document.getElementById("ires").style.display = ires.rows.length ? "block" : "none";
+    renderIntruderResults();
+  }
 }
 
 function renderIntruderResults() {
@@ -3659,3 +3748,5 @@ refreshHostOptions();
 </script>
 </body>
 </html>
+
+{% endraw %}

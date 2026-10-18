@@ -229,14 +229,24 @@ def _spy(appmod, monkeypatch, seen, pitchfork=False):
         MAX_WORDS = 1000
         MAX_COMBOS = 10_000
 
-        def run_attack(self, base, wordlist, target_id):
+        # The durable runner drives attacks through run_items (one call per
+        # flushed chunk), so that is the seam to record.
+        def run_items(self, base, items, target_id):
             seen.update(base)
-            return [{"request_id": target_id, "payload": "w", "method": "GET",
-                     "url": base["url"], "headers": {}, "body": "",
-                     "response_code": 200, "response_body": "x",
-                     "response_headers": {}}]
+            return [{"request_id": target_id, "payload": i.get("label", ""),
+                     "method": "GET", "url": base["url"], "headers": {},
+                     "body": "", "response_code": 200,
+                     "response_body": "x", "response_headers": {}}
+                    for i in items]
 
-        run_pitchfork = run_attack
+        def build_items_single(self, wordlist):
+            return [{"word": w, "payloads": None, "label": w} for w in wordlist]
+
+        def build_items_pitchfork(self, lists):
+            return [{"word": "", "payloads": {"u": "a"}, "label": "u=a"}]
+
+        run_attack = run_items
+        run_pitchfork = run_items
 
     monkeypatch.setattr(appmod, "intruder", Spy())
     return Spy
@@ -327,8 +337,10 @@ def test_markerless_request_is_refused(app_client, monkeypatch):
     _spy(appmod, monkeypatch, {})
     monkeypatch.setattr(appmod, "intruder", type("S", (), {
         "MAX_WORDS": 1000, "MAX_COMBOS": 10_000,
-        "run_attack": lambda self, b, w, t: called.append(b) or [],
-        "run_pitchfork": lambda self, b, l, t: called.append(b) or [],
+        "run_items": lambda self, b, i, t: called.append(b) or [],
+        "build_items_single": lambda self, w: [{"word": x, "payloads": None,
+                                                "label": x} for x in w],
+        "build_items_pitchfork": lambda self, l: [],
     })())
     r = client.post("/api/intruder/start",
                     json={"request_id": cap, "wordlist": ["admin", "bob"]})

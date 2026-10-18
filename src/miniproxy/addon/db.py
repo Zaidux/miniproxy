@@ -384,6 +384,23 @@ class Database:
                 FOREIGN KEY (request_id) REFERENCES requests(id)
             );
 
+            -- One row per attack. Persisting the work queue is what lets an
+            -- attack keep running while the browser is closed, and resume from
+            -- where it stopped if the dashboard restarts.
+            CREATE TABLE IF NOT EXISTS intruder_jobs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created     TEXT NOT NULL,
+                updated     TEXT NOT NULL,
+                request_id  INTEGER NOT NULL,
+                mode        TEXT NOT NULL DEFAULT 'single',
+                base        TEXT NOT NULL,
+                items       TEXT NOT NULL,
+                total       INTEGER NOT NULL,
+                progress    INTEGER NOT NULL DEFAULT 0,
+                status      TEXT NOT NULL DEFAULT 'running',
+                error       TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS config (
                 key   TEXT PRIMARY KEY,
                 value TEXT
@@ -467,6 +484,11 @@ class Database:
                     raise
         try:
             conn.execute("ALTER TABLE intruder_results ADD COLUMN ttfb_ms REAL")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+        try:
+            conn.execute("ALTER TABLE intruder_results ADD COLUMN job_id INTEGER")
         except sqlite3.OperationalError as exc:
             if "duplicate column" not in str(exc).lower():
                 raise
@@ -1498,7 +1520,8 @@ class Database:
 
     # ── Intruder results ───────────────────────────────────────────────
 
-    def store_intruder_results(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def store_intruder_results(self, results: list[dict[str, Any]],
+                               job_id: int | None = None) -> list[dict[str, Any]]:
         """Persist Intruder results, stamping each dict with its new row id.
 
         The ids are attached **in place** on the dicts passed in, because the
@@ -1512,11 +1535,12 @@ class Database:
             try:
                 cur = conn.execute(
                 "INSERT INTO intruder_results "
-                "(request_id, timestamp, payload, method, url, headers, "
+                "(request_id, job_id, timestamp, payload, method, url, headers, "
                 "body, response_code, response_body, response_headers, ttfb_ms, total_ms) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     r.get("request_id", 0),
+                    job_id,
                     now,
                     r.get("payload", ""),
                     r.get("method", "GET"),
@@ -1544,6 +1568,83 @@ class Database:
         rows = conn.execute(
             "SELECT * FROM intruder_results WHERE request_id=? ORDER BY id",
             (request_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    # ── Intruder jobs (durable attack queue) ────────────────────────
+
+    def create_intruder_job(self, *, request_id: int, mode: str,
+                            base: dict[str, Any],
+                            items: list[dict[str, Any]]) -> int:
+        """Record an attack before it starts.
+
+        Everything needed to finish it is in this row, so a dashboard restart
+        can pick it up from `progress` instead of losing the run.
+        """
+        conn = self._connect()
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "INSERT INTO intruder_jobs (created, updated, request_id, mode,"
+            " base, items, total, progress, status)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'running')",
+            (now, now, int(request_id), str(mode),
+             json.dumps(base), json.dumps(items), len(items)),
+        )
+        conn.commit()
+        job_id = int(cur.lastrowid)
+        conn.close()
+        return job_id
+
+    def update_intruder_job(self, job_id: int, **fields: Any) -> bool:
+        allowed = {"progress", "status", "error"}
+        sets, params = [], []
+        for k, v in fields.items():
+            if k not in allowed:
+                raise ValueError(f"cannot update {k}")
+            sets.append(f"{k}=?")
+            params.append(v)
+        if not sets:
+            return False
+        sets.append("updated=?")
+        params.append(datetime.now(timezone.utc).isoformat())
+        params.append(int(job_id))
+        conn = self._connect()
+        cur = conn.execute(
+            f"UPDATE intruder_jobs SET {', '.join(sets)} WHERE id=?", params)
+        conn.commit()
+        conn.close()
+        return cur.rowcount > 0
+
+    def get_intruder_job(self, job_id: int) -> dict[str, Any] | None:
+        conn = self._connect()
+        row = conn.execute("SELECT * FROM intruder_jobs WHERE id=?",
+                           (int(job_id),)).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def latest_intruder_job(self) -> dict[str, Any] | None:
+        """The most recent job, running or finished."""
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT * FROM intruder_jobs ORDER BY id DESC LIMIT 1").fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def running_intruder_jobs(self) -> list[dict[str, Any]]:
+        """Jobs a restart left 'running' — these are resumable."""
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT * FROM intruder_jobs WHERE status='running' ORDER BY id"
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def intruder_job_results(self, job_id: int) -> list[dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT * FROM intruder_results WHERE job_id=? ORDER BY id",
+            (int(job_id),),
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]
@@ -1635,6 +1736,11 @@ class Database:
         conn = self._connect()
         cur = conn.execute("DELETE FROM intruder_results")
         removed_intruder = max(cur.rowcount, 0)
+        # Forget finished/cancelled attacks too, so the dashboard does not
+        # reattach to a job whose results were just deleted and report it as
+        # "finished — 0 requests". A running job keeps its row: its thread is
+        # still updating progress and writing results.
+        conn.execute("DELETE FROM intruder_jobs WHERE status != 'running'")
         cur = conn.execute("DELETE FROM requests")
         removed = max(cur.rowcount, 0)
         conn.commit()

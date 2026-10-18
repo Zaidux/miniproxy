@@ -538,6 +538,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.host not in ("127.0.0.1", "localhost") and not args.token:
             print("⚠  Dashboard is LAN-exposed with NO auth: captures contain tokens, "
                   "cookies and session data. Pass --token to require auth.")
+        # Resume any attack a previous process left running. Doing it at
+        # startup (not only on the first status poll) means a restart with no
+        # browser open still finishes the job instead of stalling until someone
+        # looks at the dashboard.
+        try:
+            appmod._resume_intruder_jobs()
+        except Exception as exc:
+            print(f"warning: could not resume pending attacks: {exc}", file=sys.stderr)
         appmod.app.run(host=args.host, port=dash_port, debug=False)
         return 0
 

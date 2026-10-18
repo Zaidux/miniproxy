@@ -130,8 +130,10 @@ MAX_REPEATER_BODY = 50000
 _intruder_lock = threading.Lock()
 _intruder_job: dict[str, Any] | None = None  # {request_id, running, progress, results, error, started}
 
-# `§name§` — the same marker the substitution engine looks for.
-_MARKER_RE = re.compile(r"§[^§]+§")
+# `§name§` and the `{{name}}` alias — the same markers the substitution engine
+# accepts. Both count when deciding whether a request has anywhere to put a
+# payload.
+_MARKER_RE = re.compile(r"§[^§]+§|\{\{[^{}]+\}\}")
 
 
 def _request_has_marker(base: dict[str, Any]) -> bool:
@@ -154,55 +156,93 @@ def _request_has_marker(base: dict[str, Any]) -> bool:
     return any(_MARKER_RE.search(part) for part in parts)
 
 
-def _run_intruder_job(req_id: int, base: dict,
-                      wordlist: list[str]) -> None:
-    global _intruder_job
-    try:
-        results = intruder.run_attack(base, wordlist, req_id)
-        try:
-            db.store_intruder_results(results)
-        except Exception:
-            pass  # results are still returned to the client even if persistence fails
-        with _intruder_lock:
-            _intruder_job = {
-                "request_id": req_id, "running": False, "progress": len(wordlist),
-                "total": len(wordlist), "results": results, "error": None,
-            }
-    except Exception as exc:
-        with _intruder_lock:
-            _intruder_job = {
-                "request_id": req_id, "running": False,
-                "progress": 0, "total": len(wordlist),
-                "results": [], "error": str(exc),
-            }
+# Results are flushed this often. Small enough that progress is visible and a
+# crash loses little; large enough not to commit per request.
+INTRUDER_FLUSH_EVERY = 10
+
+# Job ids with a live thread, so a resume never double-runs one.
+_intruder_threads: set[int] = set()
+_intruder_cancelled: set[int] = set()
 
 
-def _run_pitchfork_job(req_id: int, base: dict,
-                       lists: dict[str, list[str]]) -> None:
-    """Background runner for a multi-position attack."""
+def _job_state(job: dict[str, Any]) -> dict[str, Any]:
+    """The client-facing view of a persisted job."""
+    results = db.intruder_job_results(job["id"])
+    return {
+        "job_id": job["id"],
+        "request_id": job["request_id"],
+        "mode": job.get("mode") or "single",
+        "running": job.get("status") == "running",
+        "progress": job.get("progress", 0),
+        "total": job.get("total", 0),
+        "count": len(results),
+        "results": results,
+        "error": job.get("error"),
+        "status": job.get("status"),
+        "durable": True,
+    }
+
+
+def _run_intruder_job(job_id: int) -> None:
+    """Execute an attack from its persisted queue, flushing as it goes.
+
+    Resumable by construction: the item list and the completed count live in
+    the database, so a restart continues from `progress` instead of losing the
+    run. Each flush persists results, so closing the browser (or losing the
+    dashboard) never discards work already done.
+    """
     global _intruder_job
-    total = 1
-    for words in lists.values():
-        total *= max(len(words), 1)
+    job = db.get_intruder_job(job_id)
+    if job is None:
+        return
+    with _intruder_lock:
+        if job_id in _intruder_threads:
+            return
+        _intruder_threads.add(job_id)
     try:
-        results = intruder.run_pitchfork(base, lists, req_id)
-        try:
-            db.store_intruder_results(results)
-        except Exception:
-            pass
-        with _intruder_lock:
-            _intruder_job = {
-                "request_id": req_id, "running": False, "progress": total,
-                "total": total, "results": results, "error": None,
-                "mode": "pitchfork",
-            }
+        base = json.loads(job["base"])
+        items = json.loads(job["items"])
+        req_id = int(job["request_id"])
+        done = int(job.get("progress") or 0)
+        while done < len(items):
+            if job_id in _intruder_cancelled:
+                db.update_intruder_job(job_id, status="cancelled", progress=done)
+                return
+            chunk = items[done:done + INTRUDER_FLUSH_EVERY]
+            results = intruder.run_items(base, chunk, req_id)
+            try:
+                db.store_intruder_results(results, job_id=job_id)
+            except Exception:
+                pass  # keep going; the rows are still shown from memory? no —
+                # persistence is the source of truth here, so log nothing and
+                # continue. A failed flush leaves progress behind, which makes
+                # the job retry that chunk on resume.
+            done += len(chunk)
+            db.update_intruder_job(job_id, progress=done)
+        db.update_intruder_job(job_id, status="done", progress=len(items))
     except Exception as exc:
+        db.update_intruder_job(job_id, status="error", error=str(exc))
+    finally:
         with _intruder_lock:
-            _intruder_job = {
-                "request_id": req_id, "running": False, "progress": 0,
-                "total": total, "results": [], "error": str(exc),
-                "mode": "pitchfork",
-            }
+            _intruder_threads.discard(job_id)
+            _intruder_cancelled.discard(job_id)
+            fresh = db.get_intruder_job(job_id)
+            if fresh is not None:
+                _intruder_job = _job_state(fresh)
+
+
+def _resume_intruder_jobs() -> None:
+    """Continue attacks a restart interrupted.
+
+    Called on the first status poll and when the dashboard starts, so an attack
+    survives a service restart rather than being silently lost.
+    """
+    for job in db.running_intruder_jobs():
+        with _intruder_lock:
+            if job["id"] in _intruder_threads:
+                continue
+        threading.Thread(target=_run_intruder_job, args=(job["id"],),
+                         daemon=True).start()
 
 
 def _safe_filename(name: str, fallback: str = "miniproxy") -> str:
@@ -1035,35 +1075,38 @@ def intruder_start():
                      "payload goes, e.g. /login?user=§user§&pass=§pass§",
         }), 400
 
+    # Build the whole work queue now and persist it. Everything needed to
+    # finish the attack is then in the database, so it keeps running with the
+    # browser closed and resumes after a dashboard restart.
+    try:
+        items = (intruder.build_items_pitchfork(cleaned)  # type: ignore[arg-type]
+                 if mode == "pitchfork"
+                 else intruder.build_items_single(list(cleaned)))  # type: ignore[arg-type]
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    total = len(items)
+
     global _intruder_job
     with _intruder_lock:
-        if _intruder_job and _intruder_job.get("running"):
+        running = db.running_intruder_jobs()
+        if running:
+            j = running[0]
             return jsonify({
                 "error": "an attack is already running",
-                "job": {k: _intruder_job[k] for k in ("request_id", "progress", "total")},
+                "job": {"job_id": j["id"], "request_id": j["request_id"],
+                        "progress": j["progress"], "total": j["total"]},
             }), 409
-        if mode == "pitchfork" and total > Intruder.MAX_COMBOS:
-            return jsonify({
-                "error": f"pitchfork would send {total} requests "
-                         f"(max {Intruder.MAX_COMBOS}) — shrink a list",
-            }), 400
-        _intruder_job = {
-            "request_id": int(req_id), "running": True,
-            "progress": 0, "total": total, "results": [], "error": None,
-            "mode": mode,
-        }
-    if mode == "pitchfork":
-        threading.Thread(
-            target=_run_pitchfork_job,
-            args=(int(req_id), base, cleaned),  # type: ignore[arg-type]
-            daemon=True, name="miniproxy-pitchfork",
-        ).start()
-    else:
-        threading.Thread(
-            target=_run_intruder_job, args=(int(req_id), base, list(cleaned)),
-            daemon=True, name="miniproxy-intruder",
-        ).start()
-    return jsonify({"started": True, "total": total, "mode": mode}), 202
+        job_id = db.create_intruder_job(
+            request_id=int(req_id), mode=mode, base=base, items=items)
+    _intruder_job = {
+        "job_id": job_id, "request_id": int(req_id), "running": True,
+        "progress": 0, "total": total, "results": [], "error": None,
+        "mode": mode, "status": "running", "durable": True,
+    }
+    threading.Thread(target=_run_intruder_job, args=(job_id,), daemon=True,
+                     name=f"miniproxy-intruder-{job_id}").start()
+    return jsonify({"started": True, "total": total, "mode": mode,
+                    "job_id": job_id, "durable": True}), 202
 
 
 def _combo_total(lists: dict[str, list[str]]) -> int:
@@ -1075,26 +1118,48 @@ def _combo_total(lists: dict[str, list[str]]) -> int:
 
 @app.route("/api/intruder/status")
 def intruder_status():
-    """Poll the running (or last) attack: progress bar + finished results."""
+    """Poll the running (or last) attack: progress, and its results so far.
+
+    DB-backed, so a page can reattach to an attack that has been running while
+    it was closed — and a dashboard restart resumes rather than losing it.
+    """
+    _resume_intruder_jobs()
+    job = None
     with _intruder_lock:
-        job = dict(_intruder_job) if _intruder_job else None
-    if not job:
+        if _intruder_job and _intruder_job.get("job_id") is not None:
+            job = db.get_intruder_job(_intruder_job["job_id"])
+    if job is None:
+        job = db.latest_intruder_job()
+    if job is None:
         return jsonify({"running": False, "has_result": False})
-    payload = {
-        "running": bool(job.get("running")),
-        "request_id": job.get("request_id"),
-        "progress": job.get("progress", 0),
-        "total": job.get("total", 0),
-        "error": job.get("error"),
-        "has_result": bool(job.get("results")),
-        # Always present so a client can render "pitchfork" without having to
-        # distinguish "absent" from "single".
-        "mode": job.get("mode", "single"),
-    }
-    if not job.get("running"):
-        payload["results"] = job.get("results", [])
-        payload["count"] = len(job.get("results", []))
+    payload = _job_state(job)
+    payload["has_result"] = bool(payload["count"])
     return jsonify(payload)
+
+
+@app.route("/api/intruder/jobs/<int:job_id>")
+def intruder_job(job_id: int):
+    """One attack, with everything it has produced so far."""
+    job = db.get_intruder_job(job_id)
+    if job is None:
+        return jsonify({"error": f"job {job_id} not found"}), 404
+    return jsonify(_job_state(job))
+
+
+@app.route("/api/intruder/cancel", methods=["POST"])
+def intruder_cancel():
+    """Stop the running attack, keeping the results already collected."""
+    with _intruder_lock:
+        job_id = None
+        if _intruder_job and _intruder_job.get("job_id") is not None:
+            job_id = _intruder_job["job_id"]
+        if job_id is None:
+            running = db.running_intruder_jobs()
+            job_id = running[0]["id"] if running else None
+        if job_id is None:
+            return jsonify({"error": "no attack is running"}), 404
+        _intruder_cancelled.add(job_id)
+    return jsonify({"ok": True, "job_id": job_id, "cancelling": True})
 
 
 @app.route("/api/intruder/results/<int:req_id>")
@@ -1397,4 +1462,8 @@ def _export_filters() -> dict:
 if __name__ == "__main__":
     port = int(os.environ.get("MINIPROXY_DASHBOARD_PORT", 5000))
     host = os.environ.get("MINIPROXY_DASHBOARD_HOST", "127.0.0.1")
+    try:
+        _resume_intruder_jobs()
+    except Exception:
+        pass
     app.run(host=host, port=port, debug=False)
