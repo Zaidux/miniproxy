@@ -263,3 +263,18 @@ def test_web_alias_copies_scope_nargs():
         "a.example", "b.example"]
     # A bare --scope must not raise either.
     assert dst.parse_args(["--scope"]).scope == []
+
+
+def test_host_filter_matches_a_url_with_a_port(db):
+    """The SQL host slice keeps the port while host_of() strips it, so an
+    exact comparison made `host=127.0.0.1` match nothing on
+    `http://127.0.0.1:5347/` — every capture on a non-default port became
+    unfilterable. Caught by smoking the installed wheel, not by the suite.
+    """
+    db.store_request("GET", "http://127.0.0.1:5347/login", {}, "")
+    db.store_request("GET", "https://example.com:8443/a", {}, "")
+    db.store_request("GET", "https://example.com/b", {}, "")
+
+    assert db.count_logs(host="127.0.0.1") == 1
+    assert db.count_logs(host="example.com") == 2
+    assert db.count_logs(exclude_host="127.0.0.1") == 2

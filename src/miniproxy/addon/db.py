@@ -156,7 +156,17 @@ _HOST_SQL_MATCH = f"(INSTR(LOWER({_HOST_SQL_EXPR}), ?) > 0)"
 # inspecting the wrong target's traffic; plain equality broke the useful
 # `mozilla.org` -> `incoming.telemetry.mozilla.org` case. A bare fragment (no
 # dot) keeps substring behaviour.
-_HOST_SQL_DOMAIN = f"(LOWER({_HOST_SQL_EXPR}) = ? OR LOWER({_HOST_SQL_EXPR}) LIKE '%.' || ?)"
+# Four patterns, because the SQL host slice keeps the port while host_of()
+# strips it: exact, exact-with-port, subdomain, subdomain-with-port. Missing
+# the port variants made `host=127.0.0.1` match nothing on
+# `http://127.0.0.1:5347/` — every capture with a non-default port became
+# unfilterable.
+_HOST_SQL_DOMAIN = (
+    f"(LOWER({_HOST_SQL_EXPR}) = ?"
+    f" OR LOWER({_HOST_SQL_EXPR}) LIKE ? || ':%'"
+    f" OR LOWER({_HOST_SQL_EXPR}) LIKE '%.' || ?"
+    f" OR LOWER({_HOST_SQL_EXPR}) LIKE '%.' || ? || ':%')"
+)
 
 
 def _static_sql() -> str:
@@ -764,7 +774,7 @@ class Database:
             h = str(host).lower()
             if "." in h:
                 clauses.append(_HOST_SQL_DOMAIN)
-                params.extend((h, h))
+                params.extend((h, h, h, h))
             else:
                 clauses.append(_HOST_SQL_MATCH)
                 params.append(h)
@@ -772,7 +782,7 @@ class Database:
             h = str(exclude_host).lower()
             if "." in h:
                 clauses.append("NOT " + _HOST_SQL_DOMAIN)
-                params.extend((h, h))
+                params.extend((h, h, h, h))
             else:
                 clauses.append("NOT " + _HOST_SQL_MATCH)
                 params.append(h)

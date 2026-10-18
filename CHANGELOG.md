@@ -12,6 +12,20 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-10-18
+
+### Fixed
+
+- **Host filtering matched nothing for any URL with a non-default port.**
+  `host_of()` strips the port but the SQL host slice keeps it, so the exact
+  comparison introduced in 0.8.3 made `host=127.0.0.1` fail on
+  `http://127.0.0.1:5347/login` — every capture on a port became unfilterable,
+  as did `exclude_host`. The match now covers the host, the host with a port, a
+  subdomain, and a subdomain with a port. Caught by smoking the installed
+  wheel, not by the suite: no existing test used a URL with a port.
+
+## [0.8.3] — 2026-10-18
+
 ## [0.8.3] — 2026-10-18
 
 ### Fixed
