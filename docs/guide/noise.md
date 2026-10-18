@@ -58,9 +58,9 @@ captured`.
 - **Capture-time rules do not drop static assets**, and they do not apply to
   Repeater or Intruder requests (those do not go through the proxy). Static
   assets are a layer 2/3 concept.
-- **`Enable bundled list` enables every rule, not only the bundled ones.** It
-  is a bulk "enable all". If you had deliberately disabled a custom rule, it
-  comes back on.
+- **`Enable bundled list` affects only the bundled rules.** A custom rule you
+  disabled stays disabled — the button does what its name says. (The CLI's
+  `noise enable` is a bulk "all on"; the dashboard and TUI are scoped.)
 - A disabled rule keeps its place in the list. Disabling stops future drops;
   it does not restore rows that were already skipped (they were never stored).
 

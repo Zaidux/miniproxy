@@ -136,19 +136,39 @@ def _tokenize(text: str) -> list[str]:
 
 
 def diff_token(a_text: str, b_text: str, limit: int = MAX_TOKENS) -> dict[str, Any]:
-    """Token-level diff: which tokens of A are absent from B."""
+    """Token-level diff, symmetric: what A has that B lacks, and vice versa.
+
+    The one-directional version answered only "is every token of A present in
+    B?", so a B that *contained* A plus extra content reported identical —
+    exactly the access-control question "does user A see an extra admin
+    section?" (A small, B large) answered "no change". ``identical`` therefore
+    requires both directions to be empty, and ``only_a``/``only_b`` name the
+    tokens each side has alone.
+    """
     all_a = _tokenize(a_text)
     a_tokens = all_a[:limit]
-    b_set = set(_tokenize(b_text))
-    rows = [{"token": t, "common": t in b_set} for t in a_tokens]
-    changed = [r for r in rows if not r["common"]]
+    b_tokens = _tokenize(b_text)[:limit]
+    a_counts: dict[str, int] = {}
+    b_counts: dict[str, int] = {}
+    for t in a_tokens:
+        a_counts[t] = a_counts.get(t, 0) + 1
+    for t in b_tokens:
+        b_counts[t] = b_counts.get(t, 0) + 1
+    # Multiset difference: a token repeated in A but absent from B is a change
+    # even if the word appears once in B.
+    only_a = [t for t, n in a_counts.items() if b_counts.get(t, 0) < n]
+    only_b = [t for t, n in b_counts.items() if a_counts.get(t, 0) < n]
+    rows = [{"token": t, "common": t not in only_a} for t in a_tokens]
+    rows += [{"token": t, "common": False, "only_b": True} for t in only_b[:limit]]
     return {
         "applicable": True,
         "rows": rows,
         "tokens": len(a_tokens),
-        "changed": len(changed),
-        "identical": not changed,
-        "truncated": len(all_a) > limit,
+        "changed": len([r for r in rows if not r["common"]]),
+        "only_a": only_a[:limit],
+        "only_b": only_b[:limit],
+        "identical": not only_a and not only_b,
+        "truncated": len(all_a) > limit or len(_tokenize(b_text)) > limit,
     }
 
 
@@ -305,9 +325,17 @@ def _summarize(out: dict) -> str:
                 bits.append(f"JSON {names}{more}")
         elif out["mode"] == "token":
             if body["changed"]:
-                new = [r["token"] for r in body["rows"] if not r["common"]][:3]
-                bits.append(f"{body['changed']} token(s) differ: "
-                            + ", ".join(new))
+                only_a = body.get("only_a") or []
+                only_b = body.get("only_b") or []
+                parts = []
+                if only_a:
+                    parts.append("only in A: " + ", ".join(only_a[:3]))
+                if only_b:
+                    # The access-control finding: B contains things A does not.
+                    parts.append("only in B: " + ", ".join(only_b[:3]))
+                detail = "; ".join(parts) if parts else ", ".join(
+                    r["token"] for r in body["rows"] if not r["common"])[:80]
+                bits.append(f"{body['changed']} token(s) differ — {detail}")
         elif not body.get("identical"):
             bits.append(f"bodies differ at byte {body.get('offset')}")
     elif out["a"]["length"] != out["b"]["length"]:

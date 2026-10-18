@@ -182,7 +182,15 @@ class Intruder:
         }
 
     def _send(self, modified: dict[str, Any]) -> dict[str, Any]:
-        """Execute the modified request and return the response summary."""
+        """Execute the modified request and return the response summary.
+
+        This must never raise. One unusable wordlist entry used to abort the
+        whole run and discard every response already collected: a payload with
+        a non-Latin-1 character in a *header* value raises
+        ``UnicodeEncodeError`` (headers are encoded latin-1; URLs and bodies
+        are fine), which is not a ``requests.RequestException``. A single bad
+        word now costs one row instead of the run.
+        """
         try:
             resp = self._session.request(
                 method=modified.get("method", "GET"),
@@ -202,13 +210,22 @@ class Intruder:
                 "headers": modified["headers"],
                 "body": modified["body"],
             }
-        except requests.RequestException as exc:
+        except Exception as exc:  # noqa: BLE001 - a failed row must not end the run
+            if isinstance(exc, UnicodeEncodeError):
+                # Name the real cause: the payload cannot go in a header.
+                detail = (
+                    "payload cannot be sent in a header — headers are "
+                    f"Latin-1, and {exc.object!r} is not: {exc}"
+                )
+            else:
+                detail = f"{type(exc).__name__}: {exc}"
             return {
                 "response_code": 0,
-                "response_body": str(exc),
+                "response_body": detail,
                 "response_headers": {},
                 "method": modified["method"],
                 "url": modified["url"],
                 "headers": modified["headers"],
                 "body": modified["body"],
+                "error": detail,
             }

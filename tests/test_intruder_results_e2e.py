@@ -93,7 +93,10 @@ def target():
     srv.shutdown()
 
 
-@pytest.fixture(scope="module")
+# Function-scoped on purpose: one test clicks "Clear captures", which deletes
+# every row — with a module-scoped DB that left later tests with no capture to
+# pick, so they errored during fixture setup for an unrelated reason.
+@pytest.fixture()
 def dash(target):
     work = tempfile.mkdtemp(prefix="mp-res-")
     db = os.path.join(work, "proxy.db")
@@ -712,7 +715,10 @@ def test_identical_urls_are_called_out_as_a_failed_run(page):
     ])""")
     page.wait_for_timeout(300)
     hint = text(page, "#ires-hint")
-    assert "same URL" in hint, hint
+    # The check compares the whole request now, so the wording is "identical"
+    # rather than "same URL" — a body-only marker makes every URL identical
+    # legitimately.
+    assert "were identical" in hint, hint
     assert "no payload was substituted" in hint, hint
 
 
@@ -720,4 +726,127 @@ def test_substituted_urls_do_not_trigger_the_warning(page):
     """The warning must not cry wolf on a healthy run."""
     run_attack(page)
     hint = text(page, "#ires-hint")
-    assert "same URL" not in hint, hint
+    assert "were identical" not in hint, hint
+
+
+# ── regressions from the pre-release audit ──────────────────────────
+
+def test_marker_name_with_a_quote_cannot_inject_an_attribute(page):
+    """esc() escaped & < > but not quotes, and marker names are interpolated
+    into double-quoted attributes in the Pitchfork rows. A captured header
+    like  X-A: §" onmouseover="alert(1)§  broke out and ran script in a
+    dashboard that holds captured credentials."""
+    page.fill("#iurl", 'https://t/?a=§" onmouseover="alert(1)§&b=1')
+    page.wait_for_timeout(250)
+    page.click("#i-mode-pitch")
+    page.wait_for_timeout(700)
+    injected = page.eval_on_selector(
+        "#pf-lists", "el => el.querySelectorAll('[onmouseover]').length")
+    assert injected == 0, "a marker name injected an event-handler attribute"
+    # The name is still displayed, just inert.
+    assert "onmouseover" in page.inner_text("#pf-lists")
+
+
+def test_start_button_recovers_after_a_refused_attack(page):
+    """The handler disabled the button, then returned on error without
+    re-enabling it — and no poll existed to restore it. The tab was dead until
+    a reload."""
+    page.fill("#iurl", "https://target.example/login?username=admin")  # no marker
+    page.wait_for_timeout(300)
+    page.on("dialog", lambda d: d.dismiss())
+    page.click("#istart")
+    page.wait_for_timeout(1500)
+    assert not page.is_disabled("#istart"), "Start stayed disabled after a refusal"
+    assert "Start attack" in text(page, "#istart"), text(page, "#istart")
+
+
+def test_identical_urls_are_fine_when_the_marker_is_in_the_body(page):
+    """A form POST with the marker in the body has one URL for every request.
+    The old check compared URLs only and wrongly declared the wordlist ignored
+    — and hid the outlier summary behind that false warning."""
+    # Three rows share a size and one differs, so there is a real majority —
+    # with two singleton sizes there is no "most common" at all.
+    page.evaluate("""() => showRes([
+      {id: 9201, payload: 'admin', method: 'POST', url: 'https://t/login',
+       body: 'username=admin', response_code: 302, response_body: 'a'},
+      {id: 9202, payload: 'bob', method: 'POST', url: 'https://t/login',
+       body: 'username=bob', response_code: 200, response_body: 'bbbb'},
+      {id: 9203, payload: 'eve', method: 'POST', url: 'https://t/login',
+       body: 'username=eve', response_code: 200, response_body: 'bbbb'},
+      {id: 9204, payload: 'trent', method: 'POST', url: 'https://t/login',
+       body: 'username=trent', response_code: 200, response_body: 'bbbb'},
+    ])""")
+    page.wait_for_timeout(400)
+    hint = text(page, "#ires-hint")
+    assert "wordlist was ignored" not in hint, hint
+    page.check("#ires-outlier")
+    page.wait_for_timeout(400)
+    assert row_payloads(page) == ["admin"], row_payloads(page)
+
+
+def test_json_payload_with_commas_survives_pasting(page):
+    """A comma is part of a JSON payload, not a separator."""
+    page.fill("#ipaste", '{"user":"admin","pass":"x"}')
+    page.wait_for_timeout(400)
+    assert page.evaluate("() => iState.words") == ['{"user":"admin","pass":"x"}']
+
+
+def test_clearing_captures_also_clears_the_results_table(page):
+    """Clear deletes every intruder result, but the table kept rendering rows
+    whose ids no longer existed, and Compare then 404'd."""
+    run_attack(page)
+    assert page.query_selector_all("#iresb tr[data-rid]")
+    page.on("dialog", lambda d: d.accept())
+    page.click("#clear-btn")
+    page.wait_for_timeout(1200)
+    assert page.query_selector_all("#iresb tr[data-rid]") == []
+    assert not page.is_visible("#ires"), "results card still visible"
+
+
+def test_view_works_when_a_result_was_not_persisted(page):
+    """Rows that failed to persist have no id; View used to do nothing at all."""
+    page.evaluate("""() => showRes([
+      {payload: 'loose', url: 'https://t/?u=loose', response_code: 200,
+       response_body: 'VISIBLE-BODY'},
+    ])""")
+    page.wait_for_timeout(400)
+    page.click("#iresb [data-rview]")
+    page.wait_for_timeout(400)
+    assert page.is_visible("#ires-modal.open"), "View did nothing for an id-less row"
+    assert "VISIBLE-BODY" in page.input_value("#ires-modal-res")
+
+
+def test_outlier_ties_name_every_common_size(page):
+    """With sizes 10,10,20,20,30 the old code called 10 "the most common" and
+    flagged the equally-common 20s as anomalies."""
+    page.evaluate("""() => showRes([
+      {id: 9301, payload: 'a', url: 'https://t/?u=a', response_code: 200,
+       response_body: 'x'.repeat(10)},
+      {id: 9302, payload: 'b', url: 'https://t/?u=b', response_code: 200,
+       response_body: 'x'.repeat(10)},
+      {id: 9303, payload: 'c', url: 'https://t/?u=c', response_code: 200,
+       response_body: 'x'.repeat(20)},
+      {id: 9304, payload: 'd', url: 'https://t/?u=d', response_code: 200,
+       response_body: 'x'.repeat(20)},
+      {id: 9305, payload: 'e', url: 'https://t/?u=e', response_code: 200,
+       response_body: 'x'.repeat(30)},
+    ])""")
+    page.wait_for_timeout(400)
+    page.check("#ires-outlier")
+    page.wait_for_timeout(400)
+    assert row_payloads(page) == ["e"], row_payloads(page)
+    hint = text(page, "#ires-hint")
+    assert "equally common" in hint and "10" in hint and "20" in hint, hint
+
+
+def test_clearing_the_last_wordlist_clears_the_product_line(page):
+    page.fill("#iurl", "https://t/?u=§user§")
+    page.wait_for_timeout(250)
+    page.click("#i-mode-pitch")
+    page.wait_for_timeout(600)
+    page.select_option('[data-pflist="user"]', "usernames")
+    page.wait_for_timeout(600)
+    assert text(page, "#pf-hint").strip(), "product line did not appear"
+    page.select_option('[data-pflist="user"]', "")
+    page.wait_for_timeout(400)
+    assert text(page, "#pf-hint").strip() == "", text(page, "#pf-hint")

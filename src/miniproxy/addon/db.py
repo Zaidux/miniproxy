@@ -18,6 +18,14 @@ DB_DIR = Path(__file__).resolve().parent
 # override via MINIPROXY_DB_PATH either way.
 DB_PATH = Path.home() / ".miniproxy" / "proxy.db"
 
+class NoiseBackupError(RuntimeError):
+    """Raised when a noise cleanup cannot write its safety backup.
+
+    Deletion is the irreversible half of a cleanup, so a failed backup aborts
+    it rather than silently deleting without a way back.
+    """
+
+
 DEFAULT_MAX_ROWS = 5_000
 DEFAULT_MAX_AGE_DAYS = 7
 DEFAULT_MAX_DB_BYTES = 50 * 1024 * 1024
@@ -142,6 +150,13 @@ _HOST_SQL_EXPR = """
 """
 # Wrap the expression in a MATCH so a param can be bound once per use.
 _HOST_SQL_MATCH = f"(INSTR(LOWER({_HOST_SQL_EXPR}), ?) > 0)"
+# A hostname-looking value matches on label boundaries: the host itself or a
+# subdomain of it. Plain substring matching made `host=example.com` also return
+# `notexample.com` and `example.com.evil`, which in a capture tool means
+# inspecting the wrong target's traffic; plain equality broke the useful
+# `mozilla.org` -> `incoming.telemetry.mozilla.org` case. A bare fragment (no
+# dot) keeps substring behaviour.
+_HOST_SQL_DOMAIN = f"(LOWER({_HOST_SQL_EXPR}) = ? OR LOWER({_HOST_SQL_EXPR}) LIKE '%.' || ?)"
 
 
 def _static_sql() -> str:
@@ -155,16 +170,32 @@ def _static_sql() -> str:
     Asserted in lockstep with the Python version by
     ``test_sql_hide_static_matches_python``.
     """
+    # COALESCE everywhere: with a NULL content_type the whole expression used
+    # to evaluate to NULL, and `WHERE NOT NULL` drops the row. So every capture
+    # with no recorded content type vanished under "Hide static", even API
+    # traffic with no extension.
+    ct = "COALESCE(LOWER(content_type), '')"
     asset_mimes = " OR ".join(
-        f"LOWER(content_type) LIKE '{p}%'" for p in sorted(STATIC_CONTENT_TYPES)
+        f"{ct} LIKE '{p}%'" for p in sorted(STATIC_CONTENT_TYPES)
     )
+    # Match the extension at the end of the *path*, not the end of the URL:
+    # `app.js?v=1` is static (the Python twin parses the path and says so), but
+    # `LIKE '%.js'` missed it, so the SQL filter and the client-side filter
+    # disagreed about cache-busted assets. Strip a query/fragment first by
+    # matching ".<ext>" followed by end-of-string, '?' or '#'.
     exts = " OR ".join(
-        f"LOWER(url) LIKE '%.{e}'" for e in sorted(STATIC_EXTENSIONS)
+        f"(LOWER(url) LIKE '%.{e}' OR LOWER(url) LIKE '%.{e}?%'"
+        f" OR LOWER(url) LIKE '%.{e}#%')"
+        for e in sorted(STATIC_EXTENSIONS)
     )
+    # The whole expression must be parenthesised. The filter is applied as
+    # "NOT " + this, and `NOT (mimes) OR (ext)` binds as `(NOT mimes) OR ext`,
+    # so a row with a NULL content type matched through the second disjunct and
+    # "Hide static" never hid extension-only rows (pending flows, 304s).
     return (
-        "(" + asset_mimes + ")"
-        " OR ((content_type IS NULL OR TRIM(content_type) = '')"
-        " AND (" + exts + "))"
+        "((" + asset_mimes + ")"
+        " OR (" + ct + " = ''"
+        " AND (" + exts + ")))"
     )
 
 
@@ -291,8 +322,14 @@ class Database:
         # local account can traverse into it, so the WAL/SHM siblings are
         # protected even before they exist (they are created on first write,
         # after this runs).
+        # Only tighten the directory when it is the tool's own state dir. With
+        # `--db /tmp/lab.db` this used to chmod /tmp to 0700, and with a bare
+        # `--db proxy.db` it chmod'd whatever directory you happened to be in —
+        # locking other accounts (or services) out of a shared path.
+        parent = os.path.dirname(self.db_path) or "."
         try:
-            os.chmod(os.path.dirname(self.db_path) or ".", 0o700)
+            if os.path.basename(os.path.abspath(parent)) == ".miniproxy":
+                os.chmod(parent, 0o700)
         except OSError:
             pass
         for suffix in ("", "-wal", "-shm"):
@@ -502,23 +539,42 @@ class Database:
         if self.max_db_bytes > 0:
             page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
             page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+            total_rows = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
+            # One call may not delete more than a quarter of the table (at
+            # least 100). A cap far below what the schema's own pages occupy
+            # is unsatisfiable, and the loop used to keep going until nothing
+            # was left.
+            budget = max(100, total_rows // 4)
+            removed_for_size = 0
             while page_size * page_count > self.max_db_bytes:
+                if removed_for_size >= budget:
+                    break
                 ids = conn.execute("SELECT id FROM requests ORDER BY id LIMIT 100").fetchall()
                 if not ids:
                     break
                 conn.executemany("DELETE FROM intruder_results WHERE request_id=?", ids)
                 conn.executemany("DELETE FROM requests WHERE id=?", ids)
                 removed += len(ids)
+                removed_for_size += len(ids)
                 conn.commit()
+                before = page_count
                 try:
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                     conn.execute("VACUUM")
                 except sqlite3.Error:
                     # Reclaiming disk space is best-effort; a reader holding
                     # the DB (TUI poll, dashboard) can legitimately block
-                    # VACUUM. Deletes above already bounded the row count.
+                    # VACUUM.
                     pass
                 page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+                if page_count >= before:
+                    # No pages were reclaimed, so the size test above cannot
+                    # become true. Without this the loop kept deleting 100
+                    # rows per pass and emptied the database — deleting rows
+                    # alone never shrinks page_count, only VACUUM does. Stop
+                    # rather than destroy captures for no benefit; the row-count
+                    # cap above is still enforced.
+                    break
         conn.commit()
         conn.close()
         return removed
@@ -705,11 +761,21 @@ class Database:
             clauses.append("INSTR(LOWER(url), ?) > 0")
             params.append(url_substr.lower())
         if host:
-            clauses.append(_HOST_SQL_MATCH)
-            params.append(str(host).lower())
+            h = str(host).lower()
+            if "." in h:
+                clauses.append(_HOST_SQL_DOMAIN)
+                params.extend((h, h))
+            else:
+                clauses.append(_HOST_SQL_MATCH)
+                params.append(h)
         if exclude_host:
-            clauses.append("NOT " + _HOST_SQL_MATCH)
-            params.append(str(exclude_host).lower())
+            h = str(exclude_host).lower()
+            if "." in h:
+                clauses.append("NOT " + _HOST_SQL_DOMAIN)
+                params.extend((h, h))
+            else:
+                clauses.append("NOT " + _HOST_SQL_MATCH)
+                params.append(h)
         if hide_static:
             clauses.append("NOT " + _static_sql())
         if highlighted_only:
@@ -1249,13 +1315,19 @@ class Database:
             return False
         return any(self._matches_rule(host, p) for p in self.active_noise_rules())
 
-    def scan_noise(self, *, ids: str = "") -> dict[str, Any]:
+    def scan_noise(self, *, ids: str = "",
+                   keep_hosts: list[str] | None = None) -> dict[str, Any]:
         """Dry run for :meth:`clean_noise` — what would be removed, and why.
 
         Returns a preview (never deletes) so the UI can show the blast radius
         before the user commits, plus the survivors so the effect is obvious.
+
+        ``keep_hosts`` must be the same list passed to :meth:`clean_noise`, or
+        the preview over-reports: the CLI showed "This would delete N" without
+        the ``--keep-host`` exclusions and then deleted fewer.
         """
         rules = self.active_noise_rules()
+        keep_set = [str(h).lower() for h in (keep_hosts or []) if str(h).strip()]
         conn = self._connect()
         rows = conn.execute(
             "SELECT id, url, content_type FROM requests ORDER BY id DESC"
@@ -1266,6 +1338,9 @@ class Database:
         keep = 0
         for r in rows:
             host = host_of(r["url"] or "") or "(unknown)"
+            if any(self._matches_rule(host, k) for k in keep_set):
+                keep += 1
+                continue
             entry = by_host.get(host)
             static = is_static_asset(r["url"] or "", r["content_type"] or "")
             if static:
@@ -1305,6 +1380,17 @@ class Database:
         backup_path = ""
         if backup and preview["matched"]:
             backup_path = self._backup_db()
+            if not backup_path:
+                # The UI and CLI both promise a timestamped backup before
+                # anything is deleted ("so this is reversible"). Proceeding
+                # after a failed backup silently breaks that promise, and the
+                # deletion is exactly the irreversible part.
+                raise NoiseBackupError(
+                    "could not write the safety backup, so nothing was "
+                    "deleted. Check free space and permissions on the "
+                    "database's directory, or call again with backup disabled "
+                    "if you accept the risk."
+                )
         keep = [str(h).lower() for h in (keep_hosts or []) if str(h).strip()]
         ids: list[int] = []
         conn = self._connect()

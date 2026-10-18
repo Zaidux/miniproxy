@@ -64,6 +64,10 @@ def _isolate_home(tmp_path: Path, monkeypatch):
     state = tmp_path / ".miniproxy"
     monkeypatch.setattr(servermod, "STATE_DIR", state)
     monkeypatch.setattr(servermod, "PID_FILE", state / "mitmdump.pid")
+    # HOST_FILE was missed, so a start() wrote it to whatever STATE_DIR the
+    # module computed at import time — a previous test's tmp dir — and a
+    # FileNotFoundError there failed an unrelated test later in the run.
+    monkeypatch.setattr(servermod, "HOST_FILE", state / "mitmdump.host")
     monkeypatch.setattr(servermod, "PORT_FILE", state / "mitmdump.port")
     monkeypatch.setattr(servermod, "DASH_PID_FILE", state / "dashboard.pid")
     monkeypatch.setattr(servermod, "DASH_PORT_FILE", state / "dashboard.port")

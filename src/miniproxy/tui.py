@@ -272,7 +272,7 @@ class NoiseScreen(ModalScreen[None]):
     BINDINGS = [
         Binding("escape,n", "dismiss_screen", "Close"),
         Binding("enter", "toggle_rule", "Toggle rule"),
-        Binding("a", "toggle_all", "All on/off"),
+        Binding("a", "toggle_all", "Bundled on/off"),
     ]
 
     def __init__(self, db: Database) -> None:
@@ -292,7 +292,18 @@ class NoiseScreen(ModalScreen[None]):
         self._reload()
 
     def _reload(self) -> None:
+        keep_id = None
+        if getattr(self, "_rules", None) and self._cursor < len(self._rules):
+            keep_id = self._rules[self._cursor]["id"]
         self._rules = self._db.list_noise_rules()
+        if keep_id is not None:
+            for i, r in enumerate(self._rules):
+                if r["id"] == keep_id:
+                    self._cursor = i
+                    break
+            else:
+                self._cursor = min(self._cursor, max(len(self._rules) - 1, 0))
+        self._cursor = min(self._cursor, max(len(self._rules) - 1, 0))
         scan = self._db.scan_noise()
         from rich.text import Text
 
@@ -306,7 +317,7 @@ class NoiseScreen(ModalScreen[None]):
             for entry in scan["by_host"][:12]:
                 body.append(f"  {entry['removed']:>5}  {entry['host']}\n")
             body.append("\n")
-        body.append("rules  (enter toggles, a toggles all):\n", style="bold")
+        body.append("rules  (enter toggles one, a toggles the bundled set):\n", style="bold")
         for i, rule in enumerate(self._rules):
             mark = "[x]" if rule["enabled"] else "[ ]"
             tag = " (bundled)" if rule["builtin"] else ""
@@ -329,7 +340,10 @@ class NoiseScreen(ModalScreen[None]):
         self._reload()
 
     def action_toggle_all(self) -> None:
-        rules = self._db.list_noise_rules()
+        # enable_all_noise_rules() is scoped to bundled rows (a custom rule
+        # must survive an opt-in), so decide the direction from those rows too
+        # — otherwise "all builtins on, one custom off" flipped the wrong way.
+        rules = [r for r in self._db.list_noise_rules() if r["builtin"]]
         turning_on = not all(r["enabled"] for r in rules)
         self._db.enable_all_noise_rules(turning_on)
         self._reload()
@@ -852,12 +866,18 @@ class MiniProxyTUI(App[None]):
             code = row.get("response_code")
             code_label = "…" if code is None else ("ERR" if code == 0 else str(code))
             key = f"row-{row.get('id')}"
+            # Seven columns are declared above; this used to fill five, so the
+            # full URL sat in "Host", Path was always blank, and the highlight
+            # marker could never appear.
+            host, path = _split_url(str(row.get("url") or ""))
             table.add_row(
                 str(row.get("id") or ""),
                 str(row.get("method") or ""),
                 code_label,
                 _fmt_ms(row.get("total_ms")),
-                str(row.get("url") or ""),
+                _short_host(host),
+                path,
+                "●" if row.get("highlight") else "",
                 key=key,
             )
             self._rows_by_key[key] = row
@@ -916,22 +936,26 @@ class MiniProxyTUI(App[None]):
 
     def action_show_rewrite(self) -> None:
         """List the match-and-replace rules active on traffic."""
-        body = RichLog(highlight=False)
+        # Built as plain lines, not on a RichLog: a RichLog that is never
+        # mounted defers every write, so `.lines` was always empty and this
+        # modal opened blank.
+        lines: list[str] = [
+            "match & replace — applied to requests as they pass through", ""
+        ]
         rules = self.db.get_rewrite_rules()
-        body.write("match & replace — applied to requests as they pass through\n")
         if not rules:
-            body.write("(no rules — traffic passes through untouched)")
+            lines.append("(no rules — traffic passes through untouched)")
         for rule in rules:
             mark = "on " if rule["enabled"] else "off"
             arrow = f" → {rule['replace']!r}" if rule["replace"] else " → (empty)"
-            body.write(
+            lines.append(
                 f"[{mark}] {rule['kind']} {rule['target']}: "
                 f"{rule['match']!r}{arrow}"
             )
-        body.write("")
-        body.write("Add or remove rules from the dashboard (Rewrite…);")
-        body.write("enabled rules take effect on new traffic immediately.")
-        self.push_screen(TextViewerScreen("Match & replace", body.lines))
+        lines.append("")
+        lines.append("Add or remove rules from the dashboard (Rewrite…);")
+        lines.append("enabled rules take effect on new traffic immediately.")
+        self.push_screen(TextViewerScreen("Match & replace", lines))
 
     # ── Proxy status & toggle ──────────────────────────────────────────
 
@@ -979,7 +1003,14 @@ class MiniProxyTUI(App[None]):
         """Start/stop the proxy off the UI thread (start can block ~8s)."""
         try:
             running = self._proxy_status_text == "running"
-            result = proxy_stop() if running else proxy_start()
+            if running:
+                result = proxy_stop()
+            else:
+                # Without db_path this started a proxy writing to the default
+                # ~/.miniproxy/proxy.db while the TUI polled --db, so captures
+                # never appeared. The TUI has no dashboard of its own either.
+                result = proxy_start(db_path=self._db_path,
+                                     with_dashboard=False)
         except Exception as exc:
             result = {"status": "error", "message": f"proxy toggle failed: {exc}"}
 
@@ -1002,7 +1033,15 @@ class MiniProxyTUI(App[None]):
             self._refresh_table(force=True)
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "filter-url":
+        # host and body were missing, and the poll's change signature is taken
+        # over the UNFILTERED rows, so editing them did nothing at all until
+        # new traffic happened to arrive. Every text filter refreshes.
+        if event.input.id in ("filter-url", "filter-body", "filter-host"):
+            self._refresh_table(force=True)
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        # The Static / Marked chips had no handler either.
+        if event.checkbox.id in ("filter-static", "filter-highlighted"):
             self._refresh_table(force=True)
 
     def action_focus_url_filter(self) -> None:

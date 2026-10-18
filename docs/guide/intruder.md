@@ -70,9 +70,11 @@ result and read **Request sent**. If the payload appears where the marker was,
 substitution is happening.
 
 **If every request was identical, the results table says so** — it puts a line
-under the toolbar reading *"All N requests sent the same URL — no payload was
-substituted, so the wordlist was ignored."* A table full of identical rows is
-otherwise easy to mistake for a finished attack.
+under the toolbar reading *"All N requests were identical — no payload was
+substituted, so the wordlist was ignored."* The whole request is compared (URL,
+body and headers), so a login whose marker is in the body is not flagged
+wrongly. A table full of identical rows is otherwise easy to mistake for a
+finished attack.
 
 ### Common mistakes / notes
 
@@ -158,7 +160,9 @@ not match the rest. That outlier is the account you are not supposed to see.
 - **Spaces inside a word are kept.** `admin' OR '1'='1` stays one payload
   instead of being split into three.
 - **Newlines and commas separate words.** Both `admin` + Enter + `root` and
-  `admin, root` work.
+  `admin, root` work. A comma **inside** a structured payload is part of the
+  payload, though: `{"user":"admin","pass":"x"}` stays one word, because
+  splitting it would send two malformed requests.
 - Lines starting with `#` are ignored, and blank lines are dropped. This is
   deliberate: wordlists copied from blog posts are full of comment headers.
 - **The list is capped at 1,000 words.** Over the cap, the label says

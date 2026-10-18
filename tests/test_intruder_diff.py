@@ -373,3 +373,27 @@ def test_stored_capture_with_markers_is_accepted_without_overrides(app_client, m
     _spy(appmod, monkeypatch, seen)
     _start_and_wait(client, {"request_id": cap, "wordlist": ["a"]})
     assert seen.get("url") == "https://t/l?u=§u§", seen
+
+
+def test_non_numeric_request_id_is_a_400_not_a_500(app_client):
+    """`int("abc")` propagated out of the route as a 500."""
+    client, _, _ = app_client
+    r = client.post("/api/intruder/start",
+                    json={"request_id": "abc", "wordlist": ["a"]})
+    assert r.status_code == 400, r.status_code
+    assert "integer" in r.get_json()["error"]
+
+
+def test_marker_only_in_a_header_satisfies_the_guard(app_client, monkeypatch):
+    """The guard checks header names and values, which _apply_payload also
+    substitutes into."""
+    client, db, appmod = app_client
+    cap = db.store_request(method="GET", url="https://t/x", headers={}, body="")
+    seen = {}
+    _spy(appmod, monkeypatch, seen)
+    _start_and_wait(client, {
+        "request_id": cap,
+        "base": {"url": "https://t/x", "headers": {"Authorization": "Bearer §t§"}},
+        "wordlist": ["abc"],
+    })
+    assert seen.get("headers") == {"Authorization": "Bearer §t§"}, seen

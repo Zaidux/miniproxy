@@ -135,3 +135,103 @@ class TestNoBlockingImport:
         import miniproxy.tui as t
 
         assert callable(t.run_tui)
+
+
+class TestAuditRegressions:
+    """Defects found by the pre-release audit of the TUI."""
+
+    def test_table_fills_all_seven_columns(self, seeded):
+        """Host/Path/H were blank: the full URL was put in Host and the last
+        two cells were padded with None."""
+        async def main():
+            app = MiniProxyTUI(db_path=seeded.db_path)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                table = app.query_one("#requests")
+                assert len(table.columns) == 7
+                row = table.get_row_at(0)
+                # Newest first: c.test/pending
+                values = [str(v) for v in row]
+                assert values[4] in ("a.test", "b.test", "c.test"), values
+                assert values[5].startswith("/"), values
+                assert "://" not in values[4], "the full URL is still in Host"
+
+        run(main())
+
+    def test_host_and_body_filters_refresh_the_table(self, seeded):
+        """Neither input had a handler, and the poll's change signature is
+        computed over unfiltered rows, so editing them did nothing at all."""
+        async def main():
+            app = MiniProxyTUI(db_path=seeded.db_path)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app.query_one("#filter-host").value = "b.test"
+                await pilot.pause()
+                assert len(app._rows_by_key) == 1, len(app._rows_by_key)
+                app.query_one("#filter-host").value = ""
+                app.query_one("#filter-body").value = "body-two"
+                await pilot.pause()
+                assert len(app._rows_by_key) == 1, len(app._rows_by_key)
+
+        run(main())
+
+    def test_static_checkbox_refreshes(self, seeded):
+        async def main():
+            app = MiniProxyTUI(db_path=seeded.db_path)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                before = len(app._rows_by_key)
+                app.query_one("#filter-static").value = True
+                await pilot.pause()
+                assert len(app._rows_by_key) <= before
+
+        run(main())
+
+    def test_rewrite_view_is_not_blank(self, seeded, monkeypatch):
+        """It wrote into a RichLog that was never mounted, so .lines was empty
+        and the modal always opened blank."""
+        async def main():
+            app = MiniProxyTUI(db_path=seeded.db_path)
+            captured = {}
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                monkeypatch.setattr(
+                    app, "push_screen",
+                    lambda screen: captured.setdefault("screen", screen))
+                app.action_show_rewrite()
+                screen = captured.get("screen")
+                assert screen is not None
+                assert screen._lines, "the rewrite view is empty"
+                assert any("match & replace" in str(ln) for ln in screen._lines)
+
+        run(main())
+
+    def test_proxy_toggle_uses_the_tuis_db(self, seeded, monkeypatch):
+        """It called proxy_start() with no db_path, so the proxy wrote to the
+        default DB while the TUI polled --db."""
+        from miniproxy import tui as tuimod
+
+        seen = {}
+
+        def fake_start(**kw):
+            seen.update(kw)
+            return {"status": "started", "pid": 1, "port": 8080,
+                    "message": "ok"}
+
+        monkeypatch.setattr(tuimod, "proxy_start", fake_start)
+
+        async def main():
+            app = MiniProxyTUI(db_path=seeded.db_path)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                app._proxy_status_text = "stopped"
+                # @work(thread=True) normally hops back to the UI thread; run
+                # the callback inline so the assertion stays synchronous.
+                monkeypatch.setattr(app, "call_from_thread",
+                                    lambda fn, *a, **k: fn(*a, **k))
+                app.action_toggle_proxy.__wrapped__(app)
+                await pilot.pause()
+
+        run(main())
+        assert seen.get("db_path") == seeded.db_path, seen
+        assert seen.get("with_dashboard") is False, seen

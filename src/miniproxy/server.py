@@ -140,6 +140,22 @@ def _resolve_port(port: int | str | None) -> Optional[int]:
     return int(port)
 
 
+def _write_state(path: Path, text: str) -> None:
+    """Write a state file, creating its directory first.
+
+    These files live under STATE_DIR, which may not exist yet (a fresh
+    MINIPROXY_STATE_DIR, a test's tmp path, or a patched constant pointing
+    somewhere else). Writing them was the *last* step of a start, so a
+    FileNotFoundError here left mitmdump running with no PID file — an orphan
+    that `status` and `stop` could not see.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    path.write_text(text)
+
+
 def _wait_listening(port: int, proc: subprocess.Popen, timeout: float = 8.0) -> bool:
     """Poll until the proxy accepts connections (or the process dies)."""
     return _wait_listening_on("127.0.0.1", port, proc, timeout)
@@ -243,20 +259,27 @@ def start(
                        pass 0.0.0.0 explicitly to expose it on the LAN).
         dash_token:    Require this token on the dashboard's mutating
                        endpoints (recommended when LAN-exposed).
-        allow_clients: Optional client-IP allowlist for the *proxy* port.
-                       The proxy is deliberately started with
-                       ``block_global=false`` (so a remote browser can use it),
-                       which makes it an open relay unless this is set: anyone
-                       who can reach the port can capture through it and fill
-                       the DB with their own traffic. Pass your client IPs to
-                       fence it off.
+        allow_clients: Restricts which **destination hosts** get
+                       intercepted (it becomes mitmproxy's ``allow_hosts``).
+                       It is NOT a client allowlist and does not close the open
+                       relay: the proxy runs with ``block_global=false`` so a
+                       remote browser can use it, which means anyone who can
+                       reach the port can capture through it and fill the DB.
+                       Use a firewall, or keep the proxy on loopback and tunnel
+                       over SSH.
         proxy_host:   Bind address for the *proxy* port. Defaults to
                        ``127.0.0.1`` so the proxy is NOT published to the
                        internet by default — reach it from another machine over
                        an SSH tunnel (``ssh -L <port>:127.0.0.1:<port> …``).
                        Pass ``0.0.0.0`` to serve the LAN/public, and pair it
-                       with *allow_clients* or a firewall.
+                       with a firewall (not *allow_clients*, which does not
+                       restrict clients).
     """
+    # `dashboard` defaults to True, so `dashboard or with_dashboard` was always
+    # true and with_dashboard=False could never suppress it. The explicit flag
+    # wins when given: the header's Start button passes False meaning "proxy
+    # only", and used to spawn a second dashboard instead.
+    want_dashboard = dashboard if with_dashboard is None else bool(with_dashboard)
     pid = _read_pid()
     if pid is not None and _process_exists(pid) and _pid_matches(pid, "mitmdump"):
         running_port = _read_port()
@@ -266,7 +289,7 @@ def start(
             "port": running_port,
             "message": f"MiniProxy is already running (PID {pid}).",
         }
-        if dashboard or with_dashboard:
+        if want_dashboard:
             # "auto" must not clobber a dashboard that is already up: the
             # ensure path below reports it with its recorded port.
             requested_dash = dash_port
@@ -337,13 +360,32 @@ def start(
         return {"status": "error",
                 "message": f"mitmdump exited immediately (code {proc.returncode}). "
                            "Is mitmproxy installed?"}
-    if not _wait_listening(port, proc):
+    # mitmdump binds only the address it was given, so probing 127.0.0.1 for a
+    # non-loopback --proxy-host always failed; the child then stayed alive with
+    # no PID file written. Loopback keeps using _wait_listening, which is the
+    # seam the tests patch.
+    probe_host = proxy_host
+    if proxy_host in ("0.0.0.0", "::", "", "127.0.0.1", "localhost"):
+        ready = _wait_listening(port, proc)
+        probe_host = "127.0.0.1"
+    else:
+        ready = _wait_listening_on(proxy_host, port, proc)
+    if not ready:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         return {"status": "error",
-                "message": f"mitmdump did not bind :{port} within 8s (PID {proc.pid})."}
+                "message": f"mitmdump did not bind {probe_host}:{port} within 8s "
+                           f"(PID {proc.pid}); the process was stopped."}
 
-    PID_FILE.write_text(str(proc.pid))
-    PORT_FILE.write_text(str(port))
-    HOST_FILE.write_text(proxy_host)
+    _write_state(PID_FILE, str(proc.pid))
+    _write_state(PORT_FILE, str(port))
+    _write_state(HOST_FILE, proxy_host)
     scope_note = (
         f", scope={len(hosts)} host(s) (out-of-scope: "
         f"{env.get('MINIPROXY_SCOPE_MODE', 'skip')})" if hosts else ""
@@ -361,7 +403,7 @@ def start(
             f"MiniProxy started on :{port} — requested port was busy, "
             f"moved up (PID {proc.pid}, db={db}{scope_note})"
         )
-    if dashboard or with_dashboard:
+    if want_dashboard:
         result["dashboard"] = _ensure_dashboard(db, dash_port, dash_host, dash_token)
     return result
 
@@ -440,9 +482,9 @@ def _ensure_dashboard(
     while time.monotonic() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", dash_port), timeout=0.4):
-                DASH_PID_FILE.write_text(str(proc.pid))
-                DASH_PORT_FILE.write_text(str(dash_port))
-                DASH_HOST_FILE.write_text(dash_host)
+                _write_state(DASH_PID_FILE, str(proc.pid))
+                _write_state(DASH_PORT_FILE, str(dash_port))
+                _write_state(DASH_HOST_FILE, dash_host)
                 display_host = _dashboard_display_host(dash_host)
                 return {
                     "status": "started",

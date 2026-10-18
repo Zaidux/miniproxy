@@ -101,10 +101,28 @@ def test_char_diff_empty_sides():
 
 # ── token ───────────────────────────────────────────────────────────
 
-def test_token_diff_flags_new_words():
+def test_token_diff_flags_words_on_both_sides():
+    """Symmetric on purpose.
+
+    The diff used to report only tokens of A missing from B, so a response that
+    contained everything A had *plus* extra content came back "identical" — the
+    access-control question "does user A see less than user B?" answered "no
+    change". Both directions are now named.
+    """
     d = diff_token("welcome back alice admin", "welcome back bob")
     changed = [r["token"] for r in d["rows"] if not r["common"]]
-    assert set(changed) == {"alice", "admin"}
+    assert set(changed) == {"alice", "admin", "bob"}
+    assert d["only_a"] == ["alice", "admin"]
+    assert d["only_b"] == ["bob"]
+    assert d["identical"] is False
+
+
+def test_token_diff_superset_is_not_identical():
+    """B containing everything A had is a change, not a match."""
+    d = diff_token("welcome user", "welcome user ADMIN SECRET")
+    assert d["identical"] is False
+    assert d["only_a"] == []
+    assert d["only_b"] == ["ADMIN", "SECRET"]
 
 
 def test_token_diff_identical():
@@ -199,11 +217,11 @@ def test_auto_falls_back_to_token_for_html():
     b = row(response_body="<p>role=admin</p>")
     d = diff_captures(a, b)
     assert d["mode"] == "token"
-    # The token diff reports tokens present in A but missing from B, so the
-    # changed token is `user` (the value A had), not `admin` (B's value).
-    changed = [r["token"] for r in d["body"]["rows"] if not r["common"]]
-    assert "user" in changed
-    assert "admin" not in changed
+    # Both values are reported: `user` only in A, `admin` only in B. Naming
+    # only A's side made a superset look identical.
+    assert d["body"]["only_a"] == ["user"]
+    assert d["body"]["only_b"] == ["admin"]
+    assert d["identical"] is False
 
 
 def test_explicit_mode_forced():

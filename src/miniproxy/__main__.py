@@ -117,6 +117,11 @@ def _same_option(p: argparse.ArgumentParser, flag: str) -> dict:
                 "help": action.help,
                 "type": action.type,
             }
+            # `nargs` must come along too: `--scope` is nargs="*" on start, so
+            # the alias rejected `miniproxy web --scope a.example b.example`
+            # with "unrecognized arguments" and broke a bare `--scope`.
+            if action.nargs is not None:
+                kwargs["nargs"] = action.nargs
             if action.__class__.__name__ == "_StoreTrueAction":
                 kwargs = {"action": "store_true", "help": action.help}
             elif action.__class__.__name__ == "_AppendAction":
@@ -381,7 +386,7 @@ def _cmd_noise(args) -> int:
 
     if action == "scan":
         db = _open_db(getattr(args, "db", None))
-        scan = db.scan_noise()
+        scan = db.scan_noise(keep_hosts=getattr(args, "keep_host", None) or [])
         print(f"{scan['matched']} capture(s) would be removed, {scan['keep']} kept.")
         if scan["by_host"]:
             print(f"\n{'HOST':<50} ROWS")
@@ -393,7 +398,7 @@ def _cmd_noise(args) -> int:
 
     if action == "clean":
         db = _open_db(getattr(args, "db", None))
-        scan = db.scan_noise()
+        scan = db.scan_noise(keep_hosts=getattr(args, "keep_host", None) or [])
         if not scan["matched"]:
             print("nothing to clean.")
             return 0
@@ -405,7 +410,11 @@ def _cmd_noise(args) -> int:
                 print(f"  {row['host']}: {row['removed']}")
             print("\nRe-run with --yes to apply (a .noise-backup-*.db is written).")
             return 1
-        result = db.clean_noise(keep_hosts=args.keep_host or [])
+        try:
+            result = db.clean_noise(keep_hosts=getattr(args, "keep_host", None) or [])
+        except db.NoiseBackupError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         print(f"removed {result['removed']} capture(s).")
         if result["backup"]:
             print(f"backup: {result['backup']}")
@@ -471,8 +480,17 @@ def main(argv: list[str] | None = None) -> int:
         elif result.get("fallback"):
             print("ℹ  Requested port was busy — the proxy took :%s instead. "
                   "Point clients at this port." % result.get("port"))
-        if result.get("dashboard"):
-            dash_url = _pasteable_dashboard_url(result["dashboard"]["url"])
+        dash_error = (result.get("dashboard") or {}).get("status") == "error"
+        dash_url = (result.get("dashboard") or {}).get("url")
+        if dash_error:
+            # The proxy started but the dashboard did not. Reading ["url"]
+            # raised KeyError, so the user got a traceback after a success
+            # message instead of the actual problem.
+            print("⚠  The dashboard did not start: %s"
+                  % (result["dashboard"].get("message") or "unknown error"),
+                  file=sys.stderr)
+        elif dash_url:
+            dash_url = _pasteable_dashboard_url(dash_url)
             # The URL a user is told to paste must open the web UI, not be a
             # bind address (0.0.0.0) or the proxy port (8080) — the proxy
             # speaks CONNECT/HTTP-proxy, which a browser address bar cannot

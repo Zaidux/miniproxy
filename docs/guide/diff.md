@@ -290,8 +290,11 @@ field differs") is not a finding.
   reported as not identical while every visible pane looks the same. If that
   happens, the two requests were sent with different bodies.
 - "Identical" means status, response headers, URL params, response body, and
-  request body all match. It does not mean the two requests were the same
-  request; only that nothing captured differs.
+  request body all match — in **both** directions. A response that contains
+  everything A had *plus* extra content is not identical: the summary names
+  those tokens as "only in B", which is usually the access-control finding
+  (user A sees less than user B). It does not mean the two requests were the
+  same request; only that nothing captured differs.
 - Two captures with the same body but different response **times** are
   identical for this purpose. Timing is not diffed.
 - The mode is chosen server-side (JSON → Tokens → Bytes). The visible tabs do

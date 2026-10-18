@@ -43,6 +43,46 @@ DASHBOARD_TOKEN = os.environ.get("MINIPROXY_DASHBOARD_TOKEN", "")
 # ── CORS + optional token auth ──────────────────────────────────────
 
 
+def _origin_matches_request(origin: str) -> bool:
+    """Is `origin` this dashboard's own origin?
+
+    Compared as scheme+host+port, not a prefix: `startswith("http://127.0.0.1")`
+    also accepted `http://127.0.0.1.evil.com`, which then got its own origin
+    echoed back in Access-Control-Allow-Origin and could read captures.
+    """
+    try:
+        got = urlsplit(origin)
+    except ValueError:
+        return False
+    if got.scheme not in ("http", "https"):
+        return False
+    host_header = (flask_request.host or "").strip().lower()
+    if not host_header:
+        return False
+    return f"{got.netloc}".lower() == host_header
+
+
+@app.before_request
+def _block_cross_origin_writes():
+    """Refuse state-changing requests a browser sends on another site's behalf.
+
+    A cross-origin HTML form can POST to /api/clear (or /api/proxy/toggle) as a
+    "simple request" with no preflight; with no dashboard token configured that
+    deleted every capture. Browsers attach Origin to those POSTs, so rejecting
+    a foreign Origin closes it. Requests with no Origin (curl, CLI, same-origin
+    navigations) are unaffected.
+    """
+    if flask_request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    origin = flask_request.headers.get("Origin")
+    if origin and not _origin_matches_request(origin):
+        return jsonify({"error": "cross-origin request refused"}), 403
+    site = flask_request.headers.get("Sec-Fetch-Site")
+    if site and site not in ("same-origin", "none"):
+        return jsonify({"error": "cross-site request refused"}), 403
+    return None
+
+
 @app.before_request
 def _token_auth():
     if not DASHBOARD_TOKEN:
@@ -64,7 +104,10 @@ def add_cors_headers(response):
     # Only echo the dashboard's own origin; `*` would let any website read
     # captures (or use the token from a same-page script) cross-origin.
     origin = flask_request.headers.get("Origin", "")
-    if origin.startswith(("http://127.0.0.1", "http://localhost")):
+    # Exact origin match through this same-origin check: a prefix test let
+    # `http://127.0.0.1.evil.com` read captured traffic, and any local port at
+    # all was accepted.
+    if origin and _origin_matches_request(origin):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Headers"] = (
@@ -574,7 +617,8 @@ def noise_rule(rule_id):
 @app.route("/api/noise/scan")
 def noise_scan():
     """Dry run: what a cleanup would remove, and why. Never deletes."""
-    return jsonify(db.scan_noise())
+    keep = flask_request.args.getlist("keep_host")
+    return jsonify(db.scan_noise(keep_hosts=keep))
 
 
 @app.route("/api/noise/clean", methods=["POST"])
@@ -586,18 +630,22 @@ def noise_clean():
     response returns that path so it can be restored from.
     """
     data = flask_request.get_json(silent=True) or {}
+    keep = data.get("keep_hosts") or []
+    if not isinstance(keep, list):
+        return jsonify({"error": "keep_hosts must be a list"}), 400
     if not data.get("confirm"):
-        preview = db.scan_noise()
+        preview = db.scan_noise(keep_hosts=[str(h) for h in keep])
         return jsonify({
             "error": "confirmation required",
             "matched": preview["matched"],
             "keep": preview["keep"],
             "by_host": preview["by_host"],
         }), 400
-    keep = data.get("keep_hosts") or []
-    if not isinstance(keep, list):
-        return jsonify({"error": "keep_hosts must be a list"}), 400
-    result = db.clean_noise(keep_hosts=[str(h) for h in keep])
+    try:
+        result = db.clean_noise(keep_hosts=[str(h) for h in keep])
+    except db.NoiseBackupError as exc:
+        # 409, not 500: the request was valid, the environment was not.
+        return jsonify({"error": str(exc)}), 409
     return jsonify({"ok": True, **result})
 
 
@@ -915,6 +963,11 @@ def intruder_start():
     req_id = data.get("request_id")
     if not req_id:
         return jsonify({"error": "request_id is required"}), 400
+    try:
+        req_id = int(req_id)
+    except (TypeError, ValueError):
+        # `int("abc")` raised straight out of the route as a 500.
+        return jsonify({"error": "request_id must be an integer"}), 400
 
     mode = str(data.get("mode") or "single").lower()
     if mode == "pitchfork":

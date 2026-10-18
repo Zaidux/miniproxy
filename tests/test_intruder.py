@@ -64,3 +64,84 @@ class TestAttack:
                                 "headers": {}, "body": ""})
         assert out["response_code"] == 0
         assert out["response_body"]  # the exception text
+
+
+class TestOneBadPayloadDoesNotKillTheRun:
+    """A single unusable payload must cost one row, not the whole attack.
+
+    Headers are encoded Latin-1, so a word containing e.g. "€" raises
+    UnicodeEncodeError — which is not a requests.RequestException, so it used
+    to escape `_send`, abort the run, and discard every response already
+    collected. The same character is harmless in the URL or body, which made it
+    hard to diagnose.
+    """
+
+    def _serve(self, handler_fn):
+        import threading
+        import time
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                handler_fn(self)
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        time.sleep(0.2)
+        return srv, srv.server_address[1]
+
+    def test_non_latin1_header_payload_is_one_failed_row(self):
+        def ok(h):
+            h.send_response(200)
+            h.send_header("Content-Length", "2")
+            h.end_headers()
+            h.wfile.write(b"ok")
+
+        srv, port = self._serve(ok)
+        try:
+            base = {"method": "GET", "url": f"http://127.0.0.1:{port}/",
+                    "headers": {"X-Test": "§v§"}, "body": ""}
+            results = Intruder().run_attack(base, ["admin", "€", "test"], 1)
+        finally:
+            srv.shutdown()
+
+        assert len(results) == 3, "the run aborted instead of recording all three"
+        codes = [r["response_code"] for r in results]
+        assert codes == [200, 0, 200], codes
+        # The failure explains itself rather than showing a bare code.
+        assert "Latin-1" in results[1]["response_body"], results[1]["response_body"]
+
+    def test_non_latin1_in_url_or_body_still_succeeds(self):
+        def ok(h):
+            h.send_response(200)
+            h.send_header("Content-Length", "2")
+            h.end_headers()
+            h.wfile.write(b"ok")
+
+        srv, port = self._serve(ok)
+        try:
+            for where, value in (("url", "http://127.0.0.1:%d/?v=§v§" % port),
+                                 ("body", "§v§")):
+                base = {"method": "GET", "url": f"http://127.0.0.1:{port}/",
+                        "headers": {}, "body": ""}
+                base[where] = value
+                out = Intruder().run_attack(base, ["€"], 1)
+                assert out[0]["response_code"] == 200, (where, out[0])
+        finally:
+            srv.shutdown()
+
+    def test_send_never_raises(self, monkeypatch):
+        """Even an unexpected exception becomes a row, not a dead run."""
+        i = Intruder()
+
+        def boom(**kw):
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr(i._session, "request", boom)
+        out = i._send({"method": "GET", "url": "http://x/", "headers": {},
+                       "body": ""})
+        assert out["response_code"] == 0
+        assert "kaboom" in out["response_body"]

@@ -102,10 +102,10 @@ and the filter bar first.
 
 - The URL box matches the **whole URL**, including the host and query string.
 - The ID range is inclusive. `42` matches only capture 42.
-- Method, status, URL, ID, host, and body search are remembered in the browser
-  across refreshes. **The two chips are not**: after a reload, **Hide static**
-  and **Highlighted** come back off. Check them before assuming rows vanished.
-  The active tab and the selected capture are also restored.
+- Method, status, URL, ID, host, body search **and both chips** are remembered
+  in the browser across refreshes. A host you were focused on is restored too,
+  even if it has since dropped out of the picker's top 60. The active tab and
+  the selected capture are also restored.
 - Clearing a filter does not delete anything.
 - **Rewrite…** and **Noise…** in this row are shortcuts to their tabs. They do
   not change the current filter.
@@ -226,8 +226,7 @@ drops accordingly.
 
 - A note does **not** count as a highlight. Use a colour.
 - Clearing a highlight removes the row from this view immediately.
-- **The chip is not remembered across a refresh.** Other filters are; this one
-  comes back off. Re-tick it after reloading.
+- **The chip is remembered across a refresh**, like the other filters.
 
 ## Resize or hide the detail pane
 

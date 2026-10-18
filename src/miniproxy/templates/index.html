@@ -986,7 +986,19 @@ async function api(url, opts = {}) {
   }
   return { ok: r.ok, status: r.status, data };
 }
-function esc(s) { if (s == null) return ""; const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+// Escape for BOTH text and attribute contexts. The <div> trick escapes
+// & < > but leaves quotes alone, which is fine in text and unsafe in an
+// attribute: a captured marker name like §" onmouseover="…§ broke out of
+// data-pf="…" and ran script. Everything on this page that interpolates a
+// capture-derived string into an attribute goes through this function.
+function esc(s) {
+  if (s == null) return "";
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 // ── URL splitting (Host / Path columns) ───────────────────────────
 // The Host and Path columns are what a tester actually scans: a wall of
@@ -1045,6 +1057,24 @@ function parseH(text) {
     if (m) h[m[1].trim()] = m[2].trim();
   });
   return h;
+}
+
+// Host and Content-Length are framing, not intent: the capture's values go
+// stale the moment you edit the request. A captured `Host` makes a retargeted
+// attack hit the old vhost on the new IP, and a captured `Content-Length`
+// survives an emptied body (requests leaves a supplied one alone), so the
+// server waits for bytes that never arrive and every request times out.
+// Dropped when prefilling the editor; type either back if you need it.
+function stripFramingHeaders(headers) {
+  let h = headers;
+  if (typeof h === "string") { try { h = JSON.parse(h || "{}"); } catch (e) { return h; } }
+  if (!h || typeof h !== "object") return h;
+  const out = {};
+  Object.keys(h).forEach(k => {
+    const n = k.toLowerCase();
+    if (n !== "host" && n !== "content-length") out[k] = h[k];
+  });
+  return out;
 }
 function scls(c) {
   if (c === null || c === undefined || c === "") return "s-0";
@@ -1203,8 +1233,11 @@ function restoreSession() {
     if (fs) document.getElementById("filter-status").value = fs;
     if (fu) document.getElementById("filter-url").value = fu;
     if (fi) document.getElementById("filter-id").value = fi;
-    const fh = localStorage.getItem("mp.filter.host");
-    if (fh) document.getElementById("filter-host").value = fh;
+    // Host options are fetched asynchronously, so assigning .value here was a
+    // no-op (a <select> with only "All hosts" rejects it) and the saved focus
+    // was lost on every reload. Hand it to refreshHostOptions() instead.
+    pendingHost = localStorage.getItem("mp.filter.host") || "";
+    if (pendingHost) document.getElementById("filter-host").dataset.pending = pendingHost;
     // These two were saved as "mp.filter.static" / "mp.filter.highlighted"
     // (built by string-stripping the id) but read from "mp.filter-highlighted",
     // so Highlighted never came back and Hide static was never read at all.
@@ -1518,13 +1551,17 @@ document.getElementById("filter-body").addEventListener("input", ev => {
 // Populated from /api/hosts so the target is one tap away, and the option
 // label carries the row count — the fastest way to see which host is
 // filling the DB ("60 captures — pocket images" explains the noise instantly).
+let pendingHost = "";
+
 async function refreshHostOptions() {
   const sel = document.getElementById("filter-host");
   const pkHost = document.getElementById("pk-host");
   if (!sel) return;
   const { data } = await api("/api/hosts?limit=60");
   const hosts = (data && data.hosts) || [];
-  const cur = sel.value;
+  // A restored value wins on the first call; after that the live select does.
+  const cur = (pendingHost || sel.value);
+  pendingHost = "";
   sel.innerHTML = '<option value="">All hosts</option>';
   hosts.forEach(h => {
     const o = document.createElement("option");
@@ -1532,7 +1569,17 @@ async function refreshHostOptions() {
     o.textContent = h.host + "  (" + h.count + ")";
     sel.appendChild(o);
   });
-  if (cur) sel.value = cur;
+  if (cur) {
+    // Keep a host that has dropped out of the top-60 as an explicit option,
+    // instead of silently resetting the filter to "All hosts".
+    if (!hosts.some(h => h.host === cur)) {
+      const o = document.createElement("option");
+      o.value = cur;
+      o.textContent = cur;
+      sel.appendChild(o);
+    }
+    sel.value = cur;
+  }
   // Mirror into the picker modal so both stay in step.
   if (pkHost) {
     const pcur = pkHost.value;
@@ -1821,7 +1868,7 @@ document.getElementById("row-pop-diff").addEventListener("click", () => {
   closeRowMenu();
   if (id == null) return;
   // Hand off to the Diff tab with this capture as A; the user picks B there.
-  openDiff(id, diffB && diffB !== id ? diffB : null);
+  openDiff(id);  // reuse a same-source B if one is set, never a foreign id
 });
 document.getElementById("row-pop-int").addEventListener("click", () => {
   const id = rowPopId;
@@ -2071,7 +2118,19 @@ function syncNoteField(e) {
   const el = document.getElementById("d-note");
   if (!el) return;
   if (state.noteRowId !== e.id) {
-    // Different capture: load its stored note and reset the dirty flag.
+    // Different capture. Switching rows used to overwrite the box outright,
+    // silently discarding an unsaved note — the poll was careful not to, and
+    // then the row click threw it away. Save it to the row it belongs to
+    // instead, since there is no good moment to ask.
+    if (state.noteDirty && state.noteRowId != null) {
+      const oldId = state.noteRowId;
+      const oldText = el.value;
+      setHighlight(oldId, undefined, oldText).then(ok => {
+        const row = state.rows.find(r => r.id === oldId);
+        if (ok && row) row.note = oldText;
+        toast(ok ? "Saved the previous note" : "Could not save the previous note", !ok);
+      });
+    }
     el.value = e.note || "";
     state.noteRowId = e.id;
     state.noteDirty = false;
@@ -2135,7 +2194,7 @@ document.getElementById("d-add-intruder").addEventListener("click", () => {
   toast("Loaded into Intruder");
 });
 document.getElementById("d-compare").addEventListener("click", () => {
-  openDiff(state.selectedId, diffB && diffB !== state.selectedId ? diffB : null);
+  openDiff(state.selectedId);
 });
 document.getElementById("d-curl").addEventListener("click", () => {
   const e = state.rows.find(x => x.id === state.selectedId);
@@ -2378,7 +2437,7 @@ function applyIntruderRequest(id) {
   if (!e) return;
   document.getElementById("imet").value = e.method;
   document.getElementById("iurl").value = e.url || "";
-  document.getElementById("ihed").value = fmtH(e.headers);
+  document.getElementById("ihed").value = fmtH(stripFramingHeaders(e.headers));
   document.getElementById("ibod").value = e.body || "";
   document.getElementById("ires").style.display = "none";
   // Setting .value does not fire an `input` event, so the pitchfork rows would
@@ -2471,18 +2530,32 @@ const WORDLIST_LIMIT = 1000; // matches Intruder.MAX_WORDS
 // wordlists copied out of blog posts are full of them, and a leading `#`
 // sent as a payload is a wasted request.
 function parseWordlistDetailed(text) {
-  const all = String(text == null ? "" : text)
-    .split(/[\n\r,]+/)
+  const raw = String(text == null ? "" : text);
+  // Newlines always separate. Commas separate too — pasted lists routinely
+  // arrive as "admin, root, guest" — but a comma INSIDE a structured payload
+  // is part of the payload: splitting {"user":"admin","pass":"x"} sent two
+  // malformed requests instead of one JSON body. So a line only splits on
+  // commas when it contains no JSON/punctuation structure.
+  const all = [];
+  for (const line of raw.split(/[\n\r]+/)) {
+    if (line.includes(",") && !/[{}[\]"]/.test(line)) {
+      all.push(...line.split(","));
+    } else {
+      all.push(line);
+    }
+  }
+  const words = all
     .map(w => w.trim())
     .filter(w => w && !w.startsWith("#"));
   return {
-    words: all.slice(0, WORDLIST_LIMIT),
-    dropped: Math.max(0, all.length - WORDLIST_LIMIT),
+    words: words.slice(0, WORDLIST_LIMIT),
+    dropped: Math.max(0, words.length - WORDLIST_LIMIT),
   };
 }
 function parseWordlistText(text) { return parseWordlistDetailed(text).words; }
 
-const iState = { mode: "single", words: [], source: "", pitch: {}, catalog: null };
+const iState = { mode: "single", words: [], source: "", pitch: {},
+                 pitchStash: {}, catalog: null };
 
 // The single place the word list changes. `label` is what the user is told is
 // driving the attack; `cardName` re-highlights the bundled card, and any other
@@ -2585,9 +2658,20 @@ async function renderPitchRows() {
   const names = currentPlaceholders();
   pfNames = names.slice();  // what the debounced listener compares against
   // Keep any words the user already chose for a placeholder that still exists.
-  Object.keys(iState.pitch).forEach(k => { if (names.indexOf(k) < 0) delete iState.pitch[k]; });
+  // A removed one is set aside rather than dropped: retyping a marker name
+  // (§user§ -> §use§ -> §user§) used to destroy a 1,000-word pasted list with
+  // no warning, because the mid-word state briefly looked like a rename.
+  Object.keys(iState.pitch).forEach(k => {
+    if (names.indexOf(k) < 0) {
+      if ((iState.pitch[k].words || []).length) iState.pitchStash[k] = iState.pitch[k];
+      delete iState.pitch[k];
+    }
+  });
   names.forEach(n => {
-    if (!(n in iState.pitch)) iState.pitch[n] = { list: "", words: [], label: "" };
+    if (!(n in iState.pitch)) {
+      iState.pitch[n] = iState.pitchStash[n] || { list: "", words: [], label: "" };
+      delete iState.pitchStash[n];
+    }
   });
   if (!names.length) {
     box.innerHTML = '<div class="empty-note">No §placeholder§ markers in this request yet. ' +
@@ -2725,7 +2809,13 @@ function updateIntruderTotal() {
     return;
   }
   const sizes = Object.values(iState.pitch).map(p => (p.words || []).length).filter(n => n > 0);
-  if (!sizes.length) { el.textContent = ""; return; }
+  if (!sizes.length) {
+    el.textContent = "";
+    // The product line below is a separate element; leaving it alone made it
+    // keep advertising "3 = 3 requests" after the list was cleared.
+    document.getElementById("pf-hint").textContent = "";
+    return;
+  }
   let total = 1;
   sizes.forEach(n => total *= n);
   el.textContent = sizes.length + " list(s) → " + total + " requests" +
@@ -2788,6 +2878,13 @@ document.getElementById("istart").addEventListener("click", async () => {
     body = { request_id: parseInt(rid, 10), base: base,
              wordlist: iState.words.slice(0, WORDLIST_LIMIT) };
   } else {
+    // Flush a pending debounced rebuild first: `lists` is built from
+    // iState.pitch, and a marker edited within the last 350ms could still be
+    // pruned after the lists were collected — sending a removed dimension and
+    // substituting the new marker with "".
+    if (currentPlaceholders().join("\u0000") !== pfNames.join("\u0000")) {
+      await renderPitchRows();
+    }
     const lists = {};
     Object.keys(iState.pitch).forEach(n => {
       if (iState.pitch[n].words && iState.pitch[n].words.length) lists[n] = iState.pitch[n].words;
@@ -2805,7 +2902,13 @@ document.getElementById("istart").addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify(body),
     });
-    if (!ok || data.error) { alert(data.error || "attack failed"); return; }
+    if (!ok || data.error) {
+      // A refused start leaves no poll behind to restore the button, so it
+      // used to stay dead until a page reload. Put it back before returning.
+      btn.disabled = false; btn.textContent = "Start attack";
+      alert(data.error || "attack failed");
+      return;
+    }
     document.getElementById("icnt").textContent = "0 / " + data.total + " requests";
     const poll = setInterval(async () => {
       try {
@@ -2841,12 +2944,18 @@ const resLen = r => (r.response_body || "").length;
 // The most common response length across every row. Computed over ALL rows,
 // never the filtered subset — otherwise turning the filter on would move the
 // baseline and the "outliers" would shift underneath the user.
-function modalResponseLen(rows) {
+// Every response length that is (joint) most common. Returning a list rather
+// than one number matters when sizes tie: picking the first and calling it
+// "the most common" hid the equally-common ones as outliers — with sizes
+// 10,10,20,20,30 it reported 10 as typical and flagged 20 twice.
+function modalResponseLens(rows) {
   const counts = new Map();
   rows.forEach(r => counts.set(resLen(r), (counts.get(resLen(r)) || 0) + 1));
-  let best = 0, bestN = -1;
-  counts.forEach((n, len) => { if (n > bestN) { best = len; bestN = n; } });
-  return best;
+  let bestN = -1;
+  counts.forEach(n => { if (n > bestN) bestN = n; });
+  const out = [];
+  counts.forEach((n, len) => { if (n === bestN) out.push(len); });
+  return out.sort((a, b) => a - b);
 }
 
 function visibleResults() {
@@ -2856,8 +2965,8 @@ function visibleResults() {
       r => Math.floor((r.response_code || 0) / 100) === Number(ires.status));
   }
   if (ires.outlier) {
-    const baseline = modalResponseLen(ires.rows);
-    rows = rows.filter(r => resLen(r) !== baseline);
+    const modes = modalResponseLens(ires.rows);
+    rows = rows.filter(r => !modes.includes(resLen(r)));
   }
   const cmp = {
     "size-desc": (a, b) => resLen(b) - resLen(a) || a.__i - b.__i,
@@ -2890,15 +2999,22 @@ function renderIntruderResults() {
   document.getElementById("icnt").textContent =
     total + " requests" + (hidden ? " · showing " + rows.length : "");
 
-  const base = ires.outlier ? modalResponseLen(ires.rows) : null;
+  const modes = ires.outlier ? modalResponseLens(ires.rows) : [];
   const hint = document.getElementById("ires-hint");
   // A run where every request carried the same URL means the payload was never
   // substituted — the wordlist was silently ignored. That is invisible when
   // you are scanning a table of 101 identical rows, so say it outright rather
   // than letting it read as a finished attack.
-  const allSameUrl = total > 1 && new Set(ires.rows.map(r => r.url)).size === 1;
-  if (allSameUrl) {
-    hint.textContent = "All " + total + " requests sent the same URL — no " +
+  //
+  // All three parts are compared, not just the URL: when the marker lives in
+  // the body (a form POST login) or in a header (Authorization), every URL is
+  // legitimately identical and claiming "no payload was substituted" was a
+  // false conclusion that also hid the outlier summary.
+  const sig = r => r.url + "\u0000" + (r.body || "") +
+    "\u0000" + JSON.stringify(r.headers || {});
+  const allSame = total > 1 && new Set(ires.rows.map(sig)).size === 1;
+  if (allSame) {
+    hint.textContent = "All " + total + " requests were identical — no " +
       "payload was substituted, so the wordlist was ignored. Put §markers§ " +
       "where the payload should go.";
   } else if (!total) {
@@ -2907,9 +3023,17 @@ function renderIntruderResults() {
     hint.textContent = "These responses were not saved to the database, so " +
       "they cannot be compared. Sorting and filtering still work.";
   } else if (ires.outlier) {
+    // Name every (joint) most-common size, so a tie is not presented as one
+    // arbitrary "typical" size with the others called anomalies.
+    const label = modes.length === 1
+      ? "Most responses are " + modes[0] + " chars"
+      : "Several sizes are equally common (" + modes.join(", ") + " chars)";
     hint.textContent = rows.length
-      ? "Most responses are " + base + " chars — these " + rows.length + " differ."
-      : "Every response is the same size (" + base + " chars); nothing stands out.";
+      ? label + " — these " + rows.length + " differ."
+      : (modes.length === 1
+          ? "Every response is the same size (" + modes[0] + " chars); nothing stands out."
+          : "Every response falls into the common sizes (" + modes.join(", ") +
+            " chars); nothing stands out.");
   } else {
     hint.textContent = ires.sel.length === 1
       ? "Now pick a second row to compare."
@@ -2937,7 +3061,7 @@ function renderIntruderResults() {
       '<td class="status ' + scls(r.response_code) + '">' + r.response_code + "</td>" +
       '<td class="trunc" style="max-width:340px">' + esc(r.url) + "</td>" +
       "<td>" + resLen(r) + "</td>" +
-      '<td><button class="btn btn-sm" data-rview="' + r.id + '">View</button></td></tr>';
+      '<td><button class="btn btn-sm" data-rview="' + resultKey(r) + '">View</button></td></tr>';
   }).join("");
 
   tb.querySelectorAll("tr[data-rid]").forEach(tr => {
@@ -2950,7 +3074,7 @@ function renderIntruderResults() {
   tb.querySelectorAll("[data-rview]").forEach(b =>
     b.addEventListener("click", ev => {
       ev.stopPropagation();
-      openResultModal(parseInt(b.dataset.rview, 10));
+      openResultModal(b.dataset.rview);
     }));
 }
 
@@ -2964,10 +3088,18 @@ function toggleResultSel(id) {
   renderIntruderResults();
 }
 
-function openResultModal(id) {
-  const r = ires.rows.find(x => x.id === id);
+// Results that failed to persist have no id, and `find(x => x.id === undefined)`
+// matched nothing, so View silently did nothing. Address rows by id when they
+// have one, and by send-order position when they do not.
+function resultKey(r) {
+  return r.id != null ? String(r.id) : "i" + r.__i;
+}
+
+function openResultModal(key) {
+  const k = String(key);
+  const r = ires.rows.find(x => resultKey(x) === k);
   if (!r) return;
-  ires.modalId = id;
+  ires.modalId = resultKey(r);
   paintResultModal();
   document.getElementById("ires-modal").classList.add("open");
 }
@@ -2976,10 +3108,10 @@ function openResultModal(id) {
 // filters — with "only size outliers" on, stepping visits just the outliers
 // instead of making you page through everything you already ruled out.
 function paintResultModal() {
-  const r = ires.rows.find(x => x.id === ires.modalId);
+  const r = ires.rows.find(x => resultKey(x) === ires.modalId);
   if (!r) return;
   const shown = visibleResults();
-  const at = shown.findIndex(x => x.id === ires.modalId);
+  const at = shown.findIndex(x => resultKey(x) === ires.modalId);
   const pos = at < 0 ? "" : (at + 1) + " / " + shown.length + " · ";
   document.getElementById("ires-modal-meta").textContent =
     pos + r.payload + "  ·  status " + r.response_code +
@@ -2993,11 +3125,11 @@ function paintResultModal() {
 
 function stepResult(delta) {
   const shown = visibleResults();
-  const at = shown.findIndex(x => x.id === ires.modalId);
+  const at = shown.findIndex(x => resultKey(x) === ires.modalId);
   if (at < 0) return;
   const next = shown[at + delta];
   if (!next) return;
-  ires.modalId = next.id;
+  ires.modalId = resultKey(next);
   paintResultModal();
 }
 
@@ -3061,6 +3193,23 @@ document.getElementById("clear-btn").addEventListener("click", async () => {
   document.getElementById("req-meta").textContent = "Select a request…";
   ["d-req-line", "d-req-body", "d-resp-h", "d-resp-b"].forEach(id => document.getElementById(id).textContent = "");
   document.getElementById("d-int").textContent = "(none yet — run one from the Intruder tab)";
+  // The clear also deletes every intruder result, so the results table must go
+  // with it. It used to keep showing rows whose ids no longer exist, and
+  // Compare then 404'd against the deleted ids.
+  ires = { rows: [], sort: "orig", status: "", outlier: false, sel: [],
+           selectable: false, modalId: null };
+  const resCard = document.getElementById("ires");
+  if (resCard) resCard.style.display = "none";
+  document.getElementById("iresb").innerHTML = "";
+  document.getElementById("icnt").textContent = "";
+  document.getElementById("ires-hint").textContent = "";
+  document.getElementById("ires-modal").classList.remove("open");
+  ["ires-sort", "ires-status"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = id === "ires-sort" ? "orig" : "";
+  });
+  const ob = document.getElementById("ires-outlier");
+  if (ob) ob.checked = false;
 });
 
 // ── Diff viewer ─────────────────────────────────────────────────────
@@ -3085,9 +3234,14 @@ function diffApi(side) {
 }
 
 function openDiff(aId, bId, src) {
-  diffASrc = diffBSrc = src || "capture";
+  const source = src || "capture";
+  // B is only carried over when it came from the same kind of row: a capture
+  // and an Intruder result live in different tables with different id spaces,
+  // so reusing one as the other silently diffed the wrong row (or 404'd).
+  const carried = diffBSrc === source && diffB != null ? diffB : null;
+  diffASrc = diffBSrc = source;
   diffA = aId || null;
-  diffB = bId || null;
+  diffB = bId !== undefined ? (bId || null) : carried;
   diffBodies = null;
   diffResult = null;
   renderDiffPickers();
@@ -3121,7 +3275,7 @@ async function runDiff() {
   if (!diffA || !diffB) return;
   const out = document.getElementById("diff-body");
   out.innerHTML = '<div class="empty-note">Comparing…</div>';
-  const aPath = diffApi("a"), bPath = diffApi("b");
+  const aPath = diffApi("a");
   const { ok, data } = await api(aPath + "/" + diffB +
                                 "?mode=" + encodeURIComponent(diffMode) +
                                 "&include_bodies=1");
@@ -3351,7 +3505,7 @@ document.getElementById("rep-newtab").addEventListener("click", async () => {
 });
 document.getElementById("r-diff").addEventListener("click", () => {
   if (state.selectedId == null) { toast("Select a captured row in Live first", true); return; }
-  openDiff(state.selectedId, diffB && diffB !== state.selectedId ? diffB : null);
+  openDiff(state.selectedId);
 });
 // Debounced auto-save so edits survive a refresh or a device switch.
 let repSaveTimer = null;

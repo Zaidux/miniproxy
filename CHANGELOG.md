@@ -12,6 +12,8 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-10-18
+
 ### Fixed
 
 - **A wordlist could run with no payload substituted at all.** 101 requests
@@ -37,6 +39,103 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
   **Next ›** and the ← / → keys to step through results without closing the
   modal; navigation follows the current sort and filters, so with **only size
   outliers** ticked it visits just the outliers.
+
+### Fixed — pre-release audit
+
+Two read-only audits of the Intruder and of every other surface found the
+following. Each is fixed with a regression test in
+`tests/test_audit_regressions.py` unless noted.
+
+**Data loss**
+
+- **`prune()` could delete every capture in the database.** The size-cap loop
+  deleted 100 rows per pass and re-tested `page_count`, but only `VACUUM`
+  shrinks `page_count` — so when `VACUUM` was blocked (a concurrent reader, a
+  busy disk) the condition never became false and the loop emptied the table
+  silently. Measured before the fix: 249 of 249 rows in one call. It now stops
+  when a pass reclaims nothing, and one call may not remove more than a quarter
+  of the table (minimum 100 rows).
+- **Noise cleanup deleted even when its safety backup failed.** `_backup_db()`
+  returns `""` on failure and the caller ignored it, while the UI and CLI both
+  promise a timestamped backup first. A failed backup now raises and nothing is
+  deleted; the API answers 409 and the CLI prints the reason.
+- **Switching rows discarded an unsaved note.** The poll was careful never to
+  overwrite the note field, and then a row click overwrote it anyway. The
+  previous row's note is now saved before the switch.
+- **`_harden_perms()` chmod'd the database's parent directory, not just
+  `~/.miniproxy`.** With `--db /tmp/lab.db` it made `/tmp` 0700. Only a
+  directory literally named `.miniproxy` is tightened now.
+
+**Security**
+
+- **A foreign site could wipe your captures.** `POST /api/clear` needs no body
+  and no token by default, so any page could submit a form to it. Mutating
+  requests with a foreign `Origin` (or `Sec-Fetch-Site: cross-site`) are now
+  refused with 403; requests with no Origin (curl, CLI) are unaffected.
+- **The CORS origin check was a prefix match**, so `http://127.0.0.1.evil.com`
+  was echoed back and could read captures. Origins are now compared exactly
+  (scheme+host+port) against the request's own host.
+- **`esc()` escaped `& < >` but not quotes**, while marker names, URLs and
+  paths are interpolated into HTML attributes. A captured request containing a
+  header like `§" onmouseover="…§` executed script in a dashboard that holds
+  captured credentials. Quotes are escaped now.
+- **`--allow-client` was still documented as a client allowlist** in
+  `server.start()`'s docstring, though it is mitmproxy's destination
+  `allow_hosts`. Corrected.
+
+**Wrong results**
+
+- **Diff reported "identical" when B was a superset of A.** The token diff was
+  one-directional, so a response containing everything A had *plus* an admin
+  section came back identical — the exact access-control question answered
+  backwards. The diff is symmetric now and the summary names tokens "only in
+  B".
+- **Diff could compare a capture against a stale Intruder result id.** A B-side
+  chosen from the Intruder results survived into a capture comparison, silently
+  diffing the wrong row (or 404ing). B is only carried over within the same
+  source.
+- **`Hide static` dropped every capture with an unrecorded content type.** The
+  SQL twin was not parenthesised, so `"NOT " + expr` parsed as
+  `(NOT mimes) OR ext`, and `NULL` content types made the expression `NULL`,
+  which `WHERE` treats as false. Extension-only rows (pending flows, 304s) were
+  also never matched. It is parenthesised and `COALESCE`d, and it now agrees
+  with the Python classifier for URLs with query strings like `app.js?v=1`.
+- **Host filtering matched substrings, so `example.com` also returned
+  `notexample.com` and `example.com.evil`** — the wrong target's traffic. A
+  hostname-looking value now matches the host and its subdomains on label
+  boundaries; a bare fragment (`mozilla`) keeps substring behaviour.
+- **The noise dry-run ignored `--keep-host`**, so it over-reported what Delete
+  would remove. Scan and clean now share the keep list.
+- **The CLI lost the dashboard URL crash path**: a dashboard start failure
+  raised `KeyError: 'url'` after a success message. It now prints the failure.
+- **`with_dashboard=False` did not suppress the dashboard** (`dashboard`
+  defaults True, and the check was `dashboard or with_dashboard`), so the
+  header's Start button could spawn a second dashboard.
+- **`miniproxy web --scope a b` was rejected** because the alias did not copy
+  `nargs` from `start`.
+- **A failed start could leave an orphan proxy with no PID file.** The state
+  files were written last and assumed their directory existed, and the
+  readiness probe always checked `127.0.0.1` even for a non-loopback
+  `--proxy-host` — so a non-loopback bind waited 8s, failed, and left mitmdump
+  running where `status` and `stop` could not see it. The directory is created,
+  the probe uses the bind address, and a failed start now stops the child.
+
+**TUI**
+
+- The table declared seven columns and filled five: the full URL sat in
+  **Host**, **Path** was always blank, and the highlight marker never showed.
+- The Rewrite view was always blank — it wrote into a `RichLog` that was never
+  mounted, so `.lines` was empty.
+- The proxy toggle started a proxy on the default DB instead of the TUI's
+  `--db`, so captures never appeared. It also no longer spawns a dashboard.
+- Host, body and the two chip filters did nothing until new traffic arrived:
+  they had no handlers, and the poll's change signature is computed over
+  unfiltered rows.
+- The noise list cursor jumped to a different rule after toggling (the list is
+  ordered enabled-first); it is preserved by rule id. `a` is labelled
+  "Bundled on/off", which is what it always did.
+- `Set-Cookie` and other duplicate headers are joined by mitmproxy into one
+  header; this is unchanged and now documented as a known limitation.
 
 ## [0.8.2] — 2026-10-17
 
