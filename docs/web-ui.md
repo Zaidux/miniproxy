@@ -486,6 +486,10 @@ point — upload and paste share one parser:
 - Blank lines and lines starting with `#` are dropped. Wordlists copied out of
   blog posts are full of comment headers, and a leading `#` sent as a payload is
   a wasted request.
+- **A line that is only a numeric range expands** — Burp's "Numbers" payload:
+  `1-255`, `1-255:2` (step), `255-1` (descending), `001-010` (zero-padded).
+  Only a whole-line range expands, so `1-2-3` stays literal. This is how an
+  SSRF address sweep is done without pasting 255 lines.
 - Lists are capped at 1,000 words. Over the cap the count says what was
   dropped (`1000 words (pasted, capped from 1199)`) rather than quietly
   truncating — and it is the capped number that appears in the request total.

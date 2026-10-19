@@ -12,6 +12,23 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-10-19
+
+### Added
+
+- **Numeric ranges as a payload source.** A paste-box line that is only a
+  number range expands the way Burp's "Numbers" payload type does:
+  `1-255`, `1-255:2` (step), `255-1` (descending), `001-010` (zero-padded).
+  Only a whole-line range expands, so payloads that merely contain a hyphen
+  (`1-2-3`, `a-b`) stay literal. This is what an SSRF address sweep needs —
+  `stockApi=http://192.168.0.{{i}}:8080/admin` with `1-255` — and it works in
+  Single list and Pitchfork, in a durable job, with the outlier filter. Before
+  this there was no way to express a range at all: the bundled ID list stopped
+  at 100 and the only alternative was pasting 255 lines by hand.
+- Documented the full SSRF workflow, including the trap that produced a
+  9,898-request run with zero findings: the `stockApi` parameter is in the
+  **body**, so markers must go in the Body box, not the URL query.
+
 ## [0.9.0] — 2026-10-18
 
 ### Added

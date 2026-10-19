@@ -68,6 +68,24 @@ class _Login(BaseHTTPRequestHandler):
             user = self.path.split("username=", 1)[-1].split("&")[0]
         SENT.append(user)
         PATHS.append(self.path)
+
+        # The SSRF lab shape: `stockApi` names a private address, and exactly
+        # one octet answers with an admin interface while the rest refuse.
+        if "stockApi=" in raw:
+            url = raw.split("stockApi=", 1)[1].split("&", 1)[0]
+            import re as _re
+            m = _re.search(r"192\.168\.0\.(\d+):8080/admin", url)
+            if m and m.group(1) == "150":
+                body, code = b'<h1>Admin interface</h1>' + b"x" * 40, 200
+            else:
+                body, code = b"Could not connect to the stock service", 500
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if user == "admin":
             body, code = BODY_VALID, 302
         else:
@@ -923,3 +941,101 @@ def test_results_survive_a_reload_without_rerunning(page):
     page.click('.tab[data-tab="intruder"]')
     page.wait_for_timeout(800)
     assert len(page.query_selector_all("#iresb tr[data-rid]")) == 3
+
+
+# ── SSRF: scanning a private range for the one live host ────────────
+#
+# The PortSwigger SSRF labs ask for exactly this: a `stockApi` URL whose final
+# octet is enumerated 1-255, looking for the single address that answers with
+# an admin interface instead of a refusal. Burp does it with a "Numbers"
+# payload; here a numeric range in the paste box does the same.
+
+SSRF_ROWS = []
+
+
+def test_octet_range_finds_the_one_live_host(page, dash):
+    """A 1-255 range in the body, one octet answering 200 and the rest 500.
+
+    Mirrors the lab: the parameter is in the POST **body**, so that is where the
+    marker goes — the mistake that made the earlier run send identical requests.
+    """
+    SSRF_ROWS.clear()
+    import json as _json
+
+    page.fill("#iurl", dash["target"] + "/product?productId=1")
+    page.wait_for_timeout(200)
+    page.fill("#ibod", 'stockApi=http://192.168.0.{{i}}:8080/admin')
+    page.wait_for_timeout(300)
+
+    # The range expands to 1..255 — no 255-line paste required.
+    page.fill("#ipaste", "1-255")
+    page.wait_for_timeout(400)
+    words = page.evaluate("() => iState.words")
+    assert len(words) == 255, len(words)
+    assert words[0] == "1" and words[-1] == "255"
+    assert "255 words" in text(page, "#ifinfo"), text(page, "#ifinfo")
+
+    page.click("#istart")
+    for _ in range(120):
+        page.wait_for_timeout(300)
+        if "finished" in text(page, "#ijob"):
+            break
+    assert "finished" in text(page, "#ijob"), text(page, "#ijob")
+
+    page.check("#ires-outlier")
+    page.wait_for_timeout(500)
+    hits = row_payloads(page)
+    assert len(hits) == 1, f"expected exactly one outlier, got {hits}"
+    assert hits[0] == "150", hits
+
+    page.click("#iresb [data-rview]")
+    page.wait_for_timeout(400)
+    req = page.input_value("#ires-modal-req")
+    assert "192.168.0.150:8080/admin" in req, req
+    assert "192.168.0.{{i}}" not in req, "the marker was not substituted"
+
+
+def test_numeric_range_forms(page):
+    """Burp's Numbers payload, expressed as a line in the paste box."""
+    def parse(text):
+        return page.evaluate("(t) => parseWordlistText(t)", text)
+
+    assert parse("1-10") == [str(i) for i in range(1, 11)]
+    assert parse("1-20:5") == ["1", "6", "11", "16"]
+    assert parse("10-1") == [str(i) for i in range(10, 0, -1)]
+    assert parse("001-003") == ["001", "002", "003"]
+    assert parse("8080-8085")[0] == "8080"
+    # Only a whole-line range expands; a payload containing a hyphen is kept.
+    assert parse("1-2-3") == ["1-2-3"]
+    assert parse("a-b") == ["a-b"]
+    assert parse("-5") == ["-5"]
+    # Mixed with normal words, and combined with comments.
+    assert parse("# scan\n1-3\nadmin") == ["1", "2", "3", "admin"]
+
+
+def test_range_is_capped_at_the_word_limit(page):
+    got = page.evaluate("() => parseWordlistDetailed('1-5000')")
+    assert len(got["words"]) == 1000
+    assert got["dropped"] == 4000, got["dropped"]
+    assert got["words"][0] == "1" and got["words"][-1] == "1000"
+
+
+def test_winner_can_be_sent_to_the_repeater(page):
+    """After finding the outlier, the next step is to edit that exact request —
+    the Repeater is already a tab, so the result just hands it over."""
+    page.evaluate("""() => showRes([
+      {id: 9401, payload: '150', method: 'POST', url: 'http://192.168.0.150:8080/admin',
+       headers: '{"Host": "192.168.0.150:8080"}', body: 'stockApi=http://192.168.0.150:8080/admin',
+       response_code: 200, response_body: '<h1>Admin</h1>'},
+    ])""")
+    page.wait_for_timeout(400)
+    page.click("#iresb [data-rview]")
+    page.wait_for_timeout(400)
+    page.click("#ires-rep")
+    page.wait_for_timeout(500)
+
+    assert page.is_visible("#rep-modal.open"), "the Repeater did not open"
+    assert page.input_value("#m-url") == "http://192.168.0.150:8080/admin"
+    assert "192.168.0.150:8080/admin" in page.input_value("#m-bod")
+    assert page.input_value("#m-met").upper() == "POST"
+    assert "Intruder result" in text(page, "#rep-origin"), text(page, "#rep-origin")

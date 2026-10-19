@@ -605,7 +605,10 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
           <textarea id="ipaste" class="wl-paste" rows="3"
             placeholder="One word per line, or comma-separated:&#10;admin&#10;root&#10;guest"></textarea>
           <span class="hint">Lines starting with <code>#</code> are ignored. Spaces inside a word are kept, so payloads like
-            <code>admin' OR '1'='1</code> survive intact.</span>
+            <code>admin' OR '1'='1</code> survive intact.<br>
+            A line that is just a number range expands — <code>1-255</code>, <code>1-255:2</code> (step),
+            <code>255-1</code> (descending), <code>001-010</code> (zero-padded) — which is how you scan a
+            private range like <code>192.168.0.§i§</code>.</span>
         </div>
         <div class="form-row">
           <label>or upload a .txt</label>
@@ -922,6 +925,8 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
       <div class="ml-auto">
         <button class="btn btn-sm" id="ires-prev" title="Previous result (←)">‹ Prev</button>
         <button class="btn btn-sm" id="ires-next" title="Next result (→)">Next ›</button>
+        <button class="btn btn-sm" id="ires-rep"
+          title="Open this exact request in the Repeater, to change a path or parameter and resend">Send to Repeater</button>
         <button class="btn btn-sm" id="ires-modal-close">Close (Esc)</button>
       </div>
     </div>
@@ -2222,7 +2227,9 @@ document.getElementById("d-open-rep").addEventListener("click", () => {
 // ── repeater modal ───────────────────────────────────────────────────
 const repModal = document.getElementById("rep-modal");
 function openRepModal(e) {
-  document.getElementById("rep-origin").textContent = "#" + e.id + " · " + (e.method || "") + " " + (e.url || "");
+  const label = e.fromIntruder ? "Intruder result #" + e.id : "#" + e.id;
+  document.getElementById("rep-origin").textContent =
+    label + " · " + (e.method || "") + " " + (e.url || "");
   document.getElementById("m-met").value = (e.method || "GET").toUpperCase();
   document.getElementById("m-url").value = e.url || "";
   document.getElementById("m-hed").value = fmtH(e.headers);
@@ -2544,6 +2551,36 @@ function normalizeMarkers(text) {
 // silently shred them into three requests. Drop blanks and `#` comments —
 // wordlists copied out of blog posts are full of them, and a leading `#`
 // sent as a payload is a wasted request.
+// A bare numeric range is expanded, Burp's "Numbers" payload type:
+//   1-255        every number, inclusive
+//   1-255:2      every second number (step)
+//   255-1        descending
+//   001-010      zero-padded to the width you typed
+// Only a line that is *entirely* `n-m` or `n-m:step` expands, so payloads that
+// merely contain a hyphen stay literal.
+const RANGE_RE = /^(\d+)\s*-\s*(\d+)(?:\s*:\s*(\d+))?$/;
+
+function rangeSize(from, to, step) {
+  return Math.floor(Math.abs(to - from) / step) + 1;
+}
+
+// Expand `n-m[:step]` for one line, or return null if it is not a range.
+function expandRange(line, limit) {
+  const m = line.match(RANGE_RE);
+  if (!m) return null;
+  const from = parseInt(m[1], 10);
+  const to = parseInt(m[2], 10);
+  const step = Math.max(1, parseInt(m[3] || "1", 10));
+  const width = /^0\d/.test(m[1]) ? m[1].length : 0;
+  const dir = from <= to ? 1 : -1;
+  const out = [];
+  for (let v = from; dir > 0 ? v <= to : v >= to; v += dir * step) {
+    out.push(width ? String(v).padStart(width, "0") : String(v));
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function parseWordlistDetailed(text) {
   const raw = String(text == null ? "" : text);
   // Newlines always separate. Commas separate too — pasted lists routinely
@@ -2551,21 +2588,36 @@ function parseWordlistDetailed(text) {
   // is part of the payload: splitting {"user":"admin","pass":"x"} sent two
   // malformed requests instead of one JSON body. So a line only splits on
   // commas when it contains no JSON/punctuation structure.
-  const all = [];
+  const chunks = [];
   for (const line of raw.split(/[\n\r]+/)) {
     if (line.includes(",") && !/[{}[\]"]/.test(line)) {
-      all.push(...line.split(","));
+      chunks.push(...line.split(","));
     } else {
-      all.push(line);
+      chunks.push(line);
     }
   }
-  const words = all
-    .map(w => w.trim())
-    .filter(w => w && !w.startsWith("#"));
-  return {
-    words: words.slice(0, WORDLIST_LIMIT),
-    dropped: Math.max(0, words.length - WORDLIST_LIMIT),
-  };
+
+  const words = [];
+  let total = 0;   // before the cap, so the label can say what was dropped
+  for (const chunk of chunks) {
+    const line = chunk.trim();
+    if (!line || line.startsWith("#")) continue;
+    const expanded = expandRange(line, WORDLIST_LIMIT + 1);
+    if (expanded) {
+      // Count the whole range even when only part of it is kept.
+      const m = line.match(RANGE_RE);
+      total += rangeSize(parseInt(m[1], 10), parseInt(m[2], 10),
+                         Math.max(1, parseInt(m[3] || "1", 10)));
+      for (const w of expanded) {
+        if (words.length >= WORDLIST_LIMIT) break;
+        words.push(w);
+      }
+      continue;
+    }
+    total += 1;
+    if (words.length < WORDLIST_LIMIT) words.push(line);
+  }
+  return { words, dropped: Math.max(0, total - words.length) };
 }
 function parseWordlistText(text) { return parseWordlistDetailed(text).words; }
 
@@ -3224,6 +3276,22 @@ function stepResult(delta) {
 
 document.getElementById("ires-prev").addEventListener("click", () => stepResult(-1));
 document.getElementById("ires-next").addEventListener("click", () => stepResult(1));
+// The natural next step after finding the interesting result: take the exact
+// request that produced it into the Repeater and edit it (change the path,
+// swap the payload for a real value). No new tab — the Repeater already is one.
+document.getElementById("ires-rep").addEventListener("click", () => {
+  const r = ires.rows.find(x => resultKey(x) === ires.modalId);
+  if (!r) return;
+  document.getElementById("ires-modal").classList.remove("open");
+  openRepModal({
+    id: r.id != null ? r.id : "result",
+    method: r.method || "GET",
+    url: r.url || "",
+    headers: r.headers || {},
+    body: r.body || "",
+    fromIntruder: true,
+  });
+});
 document.getElementById("ires-modal-close").addEventListener("click", () =>
   document.getElementById("ires-modal").classList.remove("open"));
 document.getElementById("ires-sort").addEventListener("change", e => {

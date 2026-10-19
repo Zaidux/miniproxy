@@ -169,6 +169,11 @@ not match the rest. That outlier is the account you are not supposed to see.
   `admin, root` work. A comma **inside** a structured payload is part of the
   payload, though: `{"user":"admin","pass":"x"}` stays one word, because
   splitting it would send two malformed requests.
+- **A line that is only a number range expands.** `1-255` sends 255 payloads;
+  `1-255:2` steps by two; `255-1` counts down; `001-010` keeps the zero padding.
+  This is Burp's "Numbers" payload type, and it is how you sweep an address
+  range without pasting 255 lines. Only a *whole* line that looks like a range
+  expands, so a payload like `1-2-3` or `a-b` stays literal.
 - Lines starting with `#` are ignored, and blank lines are dropped. This is
   deliberate: wordlists copied from blog posts are full of comment headers.
 - **The list is capped at 1,000 words.** Over the cap, the label says
@@ -335,6 +340,54 @@ their results.
 **Note.** An attack targets one host. Leaving it running is fine, but keep an
 eye on rate limits and lockouts: there is no throttle, and resuming does not
 slow it down either.
+
+## Sweeping a range (SSRF, ID enumeration)
+
+**What it's for.** One request whose payload is a number — an IP octet, an ID,
+a port — where you want the single value that behaves differently.
+
+**How to use it.** Put a marker in the parameter, and express the range as one
+line in the paste box:
+
+| Paste | Sends |
+|-------|-------|
+| `1-255` | 1, 2, 3 … 255 |
+| `1-1024:1` | the same, explicitly stepping by one |
+| `1-255:10` | 1, 11, 21 … 251 |
+| `255-1` | descending |
+| `001-255` | zero-padded, three digits |
+
+**Worked example — the SSRF lab.** A product page has a **Check stock** button
+that posts `stockApi=<url>` in the **body**. Capture that POST, then:
+
+1. **To Intruder**, and edit the **Body** — the parameter lives there, not in
+   the URL:
+   ```
+   stockApi=http://192.168.0.{{i}}:8080/admin
+   ```
+2. Paste `1-255` into the wordlist. The label reads `255 words`.
+3. **Start attack**. It can run while you do something else — see
+   [leaving an attack running](#leaving-an-attack-running).
+4. Tick **only size outliers**, or sort by **Status**. One address answers with
+   an admin page; everything else refuses. In the lab, `192.168.0.150` is the
+   hit.
+5. Press **View** on it to confirm the exact URL that was sent, then take the
+   winning value to **Repeater** and change the path to
+   `/admin/delete?username=carlos`.
+
+**What to look for.** A different status code or size on exactly one payload.
+If every row is identical, check **View → Request sent**: if the marker is still
+in the body as `{{i}}`, the parameter you marked is not the one being read — the
+most common cause is a marker in the URL when the app reads the body.
+
+**Common mistakes / notes.**
+
+- The cap is 1,000 payloads, so `1-255` fits easily; `1-5000` is truncated and
+  the label says so.
+- Markers are `{{name}}` or `§name§`; see
+  [mark where the payload goes](#before-you-start-mark-where-the-payload-goes).
+- An unreachable host often looks like a *zero* status or a timeout rather than
+  an error page. Sort by size and read the outliers, not just the 200s.
 
 ## Read the results
 
