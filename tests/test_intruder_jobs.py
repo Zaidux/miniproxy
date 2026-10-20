@@ -258,3 +258,75 @@ def test_clear_drops_finished_jobs_but_keeps_a_running_one(marker_capture):
     db.clear()
     assert db.get_intruder_job(done) is None
     assert db.get_intruder_job(live) is not None
+
+
+# ── replaying a request must not lie about its body ─────────────────
+#
+# A captured Content-Length describes the captured body. Editing the body (or
+# a textarea normalising CRLF) leaves it stale, and the server then reads the
+# wrong number of bytes: too few and it stops mid-part, too many and it waits.
+# PortSwigger's avatar lab reported "Missing parameter 'csrf'" for exactly this.
+
+def test_repeater_recomputes_content_length(app_client):
+    import socket
+    import threading
+
+    received = {}
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def serve():
+        conn, _ = srv.accept()
+        try:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += conn.recv(4096)
+            head, _, rest = data.partition(b"\r\n\r\n")
+            length = 0
+            for line in head.split(b"\r\n"):
+                if line.lower().startswith(b"content-length:"):
+                    length = int(line.split(b":", 1)[1])
+            while len(rest) < length:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                rest += chunk
+            received["length"] = length
+            received["body"] = rest[:length]
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        finally:
+            conn.close()
+            srv.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+
+    client, _, _ = app_client
+    body = "x" * 40
+    r = client.post("/api/repeater/send", json={
+        "method": "POST",
+        # deliberately the stale captured value
+        "headers": {"Content-Length": "999", "Content-Type": "text/plain"},
+        "url": f"http://127.0.0.1:{port}/x",
+        "body": body,
+    })
+    assert r.status_code == 200, r.get_json()
+    assert received.get("length") == len(body), received
+    assert received.get("body") == body.encode(), received
+
+
+def test_intruder_ignores_a_captured_content_length():
+    """Same defect in the fuzzing path: the payload changes the body length."""
+    from miniproxy.intruder import Intruder
+
+    i = Intruder()
+    mod = i._apply_payload(
+        {"method": "POST", "url": "https://t/x",
+         "headers": {"Content-Length": "533", "Content-Type": "text/plain"},
+         "body": "csrf=§t§"}, "abc")
+    headers = {k.lower(): v for k, v in mod["headers"].items()}
+    assert "content-length" not in headers, headers
+    assert "transfer-encoding" not in headers, headers
+    assert "content-type" in headers, headers

@@ -12,6 +12,50 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-10-20
+
+### Fixed
+
+- **Replaying an uploaded file failed with "Missing parameter 'csrf'".** Two
+  separate defects, both in the send path:
+  - A captured `Content-Length` was forwarded verbatim. It describes the
+    captured body, so any edit made it wrong; too small and the server reads
+    only part of the body and stops **mid-boundary**, too large and it waits.
+    The Repeater and the Intruder now drop `Content-Length` /
+    `Transfer-Encoding` and let the HTTP client compute them.
+  - A browser `<textarea>` normalises CRLF to LF, and multipart parts are
+    delimited by `CRLF--boundary`, so loading a captured upload and pressing
+    Send broke the framing. CRLF is now restored for multipart bodies
+    (detected from the content type, or from a body starting with `--`).
+
+  Because `csrf` is the *last* part of the body, it is what a short read loses
+  first — which is why the error named that field. Reproduced against a server
+  that validates the closing boundary: `400 Missing parameter 'csrf'` before,
+  `200 uploaded` after, with all 470 bytes delivered.
+
+## [0.9.2] — 2026-10-19
+
+### Added
+
+- **A `{{…}}` button beside URL and Body** turns the selected text into a
+  marker. Select the `1` in `192.168.0.1`, tap it, and the field becomes
+  `192.168.0.{{i}}`; with only a cursor placed it inserts a marker there. This
+  closes the phone gap: `§` cannot be typed on a mobile keyboard, so marking a
+  value was previously impossible without a hardware keyboard.
+- A **marker counter** beside **Start attack** (`0 markers`, `1 marker (i)`).
+
+### Fixed
+
+- **"No param markers" blocked the attack with a modal.** The check was
+  correct — a request with no marker cannot substitute anything — but the
+  modal did not say *which* field was unmarked, could not be read while fixing
+  it, and left no way to add a marker without typing `§`. The warning is now an
+  inline line, **Start attack** is disabled while it applies, and the `{{…}}`
+  button makes fixing it one tap. The server-side guard is unchanged, so a
+  stale tab still cannot send a wordlist of identical requests.
+
+## [0.9.1] — 2026-10-19
+
 ## [0.9.1] — 2026-10-19
 
 ### Added

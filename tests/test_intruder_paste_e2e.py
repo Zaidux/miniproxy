@@ -134,6 +134,11 @@ def test_bundled_card_actually_reaches_the_attack(page):
     separate bare `words`, so this used to alert "Pick a bundled list or
     upload a wordlist" immediately after the card showed the right count.
     """
+    # The picked capture has no marker, and Start is now disabled until there
+    # is somewhere to substitute — add one so this test is about the bundled
+    # list, not about the marker guard.
+    page.fill("#iurl", "https://target.example/login?u=§user§")
+    page.wait_for_timeout(300)
     page.click('[data-wl="ids"]')
     page.wait_for_timeout(400)
     assert set_words(page), "clicking a bundled card did not populate the word list"

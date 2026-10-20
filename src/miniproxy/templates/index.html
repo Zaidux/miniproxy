@@ -298,6 +298,13 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
 .pf-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
 .pf-row input[type=number]{width:88px}
 .pf-lists{display:flex;flex-direction:column;gap:6px}
+/* A marker button attached to the field it edits: on a phone, typing `§` is
+   the hard part, and selecting the value then tapping is one gesture. */
+.with-mark{display:flex;gap:6px;align-items:flex-start;flex:1}
+.with-mark textarea,.with-mark input{flex:1;min-width:0}
+.mark-btn{flex:0 0 auto;font-family:ui-monospace,Menlo,monospace;font-size:11px;
+  min-height:34px;padding:4px 8px}
+
 /* Paste-a-wordlist: the single box, and the one each pitchfork row unfolds. */
 .wl-paste{min-height:70px}
 .pf-pastebox{display:flex;gap:6px;align-items:flex-start;margin:-2px 0 10px;flex-wrap:wrap}
@@ -584,10 +591,24 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
           <select id="imet"><option>GET</option><option>POST</option><option>PUT</option>
             <option>DELETE</option><option>PATCH</option></select>
         </div>
-        <div class="form-row"><label>URL</label><input id="iurl" placeholder="https://target.com?id=&sect;fuzz&sect;"></div>
+        <div class="form-row">
+          <label>URL</label>
+          <div class="with-mark">
+            <input id="iurl" placeholder="https://target.com?id={{fuzz}}">
+            <button class="btn btn-sm mark-btn" type="button" data-mark="iurl"
+              title="Wrap the selected text as a marker, so a payload replaces it. Select the value first, or place the cursor where it should go.">{{…}}</button>
+          </div>
+        </div>
       </div>
       <div class="form-row"><label>Headers</label><textarea id="ihed" rows="6"></textarea></div>
-      <div class="form-row"><label>Body</label><textarea id="ibod" rows="6"></textarea></div>
+      <div class="form-row">
+        <label>Body</label>
+        <div class="with-mark">
+          <textarea id="ibod" rows="6"></textarea>
+          <button class="btn btn-sm mark-btn" type="button" data-mark="ibod"
+            title="Wrap the selected text as a marker. Select the value first (long-press on a phone), or place the cursor where it should go.">{{…}}</button>
+        </div>
+      </div>
     </div>
   </div>
   <div class="card">
@@ -627,9 +648,14 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
         <button class="btn btn-danger" id="istart">Start attack</button>
         <button class="btn btn-sm" id="istop" style="display:none">Stop attack</button>
         <span class="text-sm text-muted" id="i-total"></span>
+        <span class="text-sm" id="i-markers"></span>
       </div>
       <!-- Attacks run server-side and their queue is persisted, so this line
            says they survive leaving the page or closing the browser. -->
+      <!-- Says, before you press Start, whether the request has anywhere to put
+           a payload. The old behaviour was a modal after the click, which does
+           not say *which* field is unmarked. -->
+      <div class="hint" id="inomar" style="display:none;color:var(--orange);margin-top:6px"></div>
       <div class="hint" id="ijob" style="margin-top:6px"></div>
     </div>
   </div>
@@ -2226,6 +2252,19 @@ document.getElementById("d-open-rep").addEventListener("click", () => {
 
 // ── repeater modal ───────────────────────────────────────────────────
 const repModal = document.getElementById("rep-modal");
+// A <textarea> normalises CRLF to LF, and multipart bodies *require* CRLF:
+// the parts are delimited by "\r\n--boundary". Loading a captured upload and
+// pressing Send therefore sent a body the server could not parse — it answered
+// "Missing parameter 'csrf'" because the final part was never terminated.
+// Re-apply the framing the original body had.
+function crlfBody(raw, headersText) {
+  const text = String(raw == null ? "" : raw).replace(/\r\n/g, "\n");
+  const looksMultipart =
+    /multipart\//i.test(String(headersText || "")) ||
+    text.replace(/^\s+/, "").startsWith("--");
+  return looksMultipart ? text.replace(/\n/g, "\r\n") : text;
+}
+
 function openRepModal(e) {
   const label = e.fromIntruder ? "Intruder result #" + e.id : "#" + e.id;
   document.getElementById("rep-origin").textContent =
@@ -2251,11 +2290,12 @@ async function sendRepeater(payload) {
   document.getElementById("m-out").textContent = fmtH(data.headers) + "\n\n" + (data.body || "(empty body)");
 }
 document.getElementById("m-send").addEventListener("click", () => {
+  const headersText = document.getElementById("m-hed").value;
   sendRepeater({
     method: document.getElementById("m-met").value,
     url: document.getElementById("m-url").value.trim(),
-    headers: parseH(document.getElementById("m-hed").value),
-    body: document.getElementById("m-bod").value,
+    headers: parseH(headersText),
+    body: crlfBody(document.getElementById("m-bod").value, headersText),
   });
 });
 document.addEventListener("keydown", ev => {
@@ -2453,8 +2493,9 @@ function applyIntruderRequest(id) {
   document.getElementById("ihed").value = fmtH(stripFramingHeaders(e.headers));
   document.getElementById("ibod").value = e.body || "";
   document.getElementById("ires").style.display = "none";
-  // Setting .value does not fire an `input` event, so the pitchfork rows would
-  // otherwise keep describing the previous request.
+  // Setting .value does not fire an `input` event, so the pitchfork rows and
+  // the marker state would otherwise keep describing the previous request.
+  updateIntruderMarkerState();
   if (iState.mode === "pitchfork") renderPitchRows();
 }
 document.getElementById("isel-btn").addEventListener("click", () => openPicker("intruder"));
@@ -2545,6 +2586,86 @@ function normalizeMarkers(text) {
   return String(text == null ? "" : text)
     .replace(/\{\{\s*([^{}]+?)\s*\}\}/g, "\u00a7$1\u00a7");
 }
+
+// Marker bookkeeping for the editor: does the request have anywhere to put a
+// payload, and in which field?
+function countMarkers(text) {
+  return (normalizeMarkers(text).match(/§[^§]+§/g) || []).length;
+}
+
+function intruderMarkerState() {
+  const url = document.getElementById("iurl").value;
+  const body = document.getElementById("ibod").value;
+  const headers = document.getElementById("ihed").value;
+  return {
+    url: countMarkers(url),
+    body: countMarkers(body),
+    headers: countMarkers(headers),
+    total: countMarkers(url) + countMarkers(body) + countMarkers(headers),
+    names: currentPlaceholders(),
+  };
+}
+
+// One tap to turn a value into a marker. With a selection, the selection is
+// wrapped (select the `1` in `192.168.0.1`). With just a caret, a marker is
+// inserted there. The name defaults to the first marker already present, then
+// `i` — so repeating the gesture produces `{{i}}` consistently.
+function wrapSelectionAsMarker(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? start;
+  const sel = el.value.slice(start, end);
+  // Name it from markers already in THIS field, then a selected identifier,
+  // then "i". Deliberately field-local: marking the body should not borrow a
+  // name from the URL, which made the result depend on unrelated context.
+  const inField = (el.value.match(/§([^§]+)§/g) || []).map(t => t.slice(1, -1));
+  const name = /^[A-Za-z_][\w-]*$/.test(sel) && sel.length <= 16 && !inField.length
+    ? sel
+    : (inField[0] || "i");
+  const insert = "{{" + name + "}}";
+  const next = el.value.slice(0, start) + insert + el.value.slice(end);
+  el.value = next;
+  const caret = start + insert.length;
+  try { el.setSelectionRange(caret, caret); } catch (e) {}
+  el.focus();
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  updateIntruderMarkerState();
+}
+
+// Keep the inline line and the Start button in step with the fields. Silence
+// before the first request is picked: an empty tab is not an error.
+function updateIntruderMarkerState() {
+  const warn = document.getElementById("inomar");
+  const chip = document.getElementById("i-markers");
+  const start = document.getElementById("istart");
+  if (!warn || !chip) return;
+  const picked = !!document.getElementById("isel").value;
+  const st = intruderMarkerState();
+  if (!picked) {
+    warn.style.display = "none";
+    chip.textContent = "";
+    start.disabled = false;
+    return;
+  }
+  if (!st.total) {
+    const where = "URL or Body";
+    warn.textContent = "No marker yet, so every payload would send the same " +
+      "request. Select the value to replace (e.g. the 1 in 192.168.0.1) and " +
+      "tap {{…}} beside " + where + " — no typing needed.";
+    warn.style.display = "";
+    chip.textContent = "0 markers";
+    start.disabled = true;
+    return;
+  }
+  warn.style.display = "none";
+  chip.textContent = st.total + " marker" + (st.total === 1 ? "" : "s") +
+    " (" + st.names.join(", ") + ")";
+  start.disabled = false;
+}
+
+document.querySelectorAll("[data-mark]").forEach(btn =>
+  btn.addEventListener("click", () => wrapSelectionAsMarker(btn.dataset.mark)));
 
 // Split on newlines and commas, never on spaces: payloads legitimately
 // contain spaces ("admin' OR '1'='1"), and a space-separated split would
@@ -2710,6 +2831,7 @@ let pfRefreshTimer = null;
 ["iurl", "ibod", "ihed"].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
+  el.addEventListener("input", updateIntruderMarkerState);
   el.addEventListener("input", () => {
     if (iState.mode !== "pitchfork") return;
     clearTimeout(pfRefreshTimer);
@@ -2929,11 +3051,10 @@ document.getElementById("istart").addEventListener("click", async () => {
   // requests is 1000 wasted requests and a very confusing result table.
   if (!/§[^§]+§|\{\{[^{}]+\}\}/.test(
         base.url + "\n" + JSON.stringify(base.headers) + "\n" + base.body)) {
-    alert("No markers in this request.\n\n" +
-      "Put {{param}} (or §param§) where the payload goes — for example:\n" +
-      "  https://target.com/login?user={{user}}&pass={{pass}}\n\n" +
-      "{{...}} is easier to type on a phone.\n" +
-      "Otherwise every word produces the exact same request.");
+    // Inline, not a modal: the message has to stay visible while you fix the
+    // field it is talking about.
+    updateIntruderMarkerState();
+    document.getElementById("inomar").scrollIntoView({ block: "center" });
     return;
   }
   // Attacks run server-side in a background thread — start them, then poll
@@ -2993,9 +3114,12 @@ let ijPoll = null;
 function setIntruderRunning(running) {
   const start = document.getElementById("istart");
   const stop = document.getElementById("istop");
-  start.disabled = running;
   start.textContent = running ? "Running…" : "Start attack";
   stop.style.display = running ? "" : "none";
+  // Re-enabling unconditionally could override the "no marker" disable, so let
+  // the marker state have the last word when the attack ends.
+  start.disabled = running;
+  if (!running) updateIntruderMarkerState();
 }
 
 function attachIntruderJob(st) {

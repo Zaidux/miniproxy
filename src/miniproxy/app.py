@@ -245,6 +245,24 @@ def _resume_intruder_jobs() -> None:
                          daemon=True).start()
 
 
+# Headers that describe a body rather than the intent of the request. A
+# captured Content-Length goes stale the moment the body is edited — one byte
+# too small and the server truncates the body mid-part, one byte too large and
+# it waits for bytes that never arrive. requests recomputes both when they are
+# absent, so they are always dropped before replaying.
+_FRAMING_HEADERS = {"content-length", "transfer-encoding"}
+
+
+def _reframe_headers(headers: Any) -> dict[str, str]:
+    """Strip body-framing headers so the client recomputes them."""
+    out: dict[str, str] = {}
+    for name, value in dict(headers or {}).items():
+        if str(name).strip().lower() in _FRAMING_HEADERS:
+            continue
+        out[str(name)] = str(value)
+    return out
+
+
 def _safe_filename(name: str, fallback: str = "miniproxy") -> str:
     """Sanitize a user-supplied string for use in a Content-Disposition filename."""
     cleaned = "".join(c for c in name if c.isalnum() or c in "._-").strip("._-")
@@ -958,7 +976,7 @@ def repeater_send():
         resp = requests.request(
             method=method,
             url=url,
-            headers=raw_headers,
+            headers=_reframe_headers(raw_headers),
             data=body,
             timeout=15,
             verify=False,

@@ -55,6 +55,13 @@ Authorization: Bearer §token§
 `§` is just a marker character this tool looks for. There is nothing to enable
 and nothing to escape.
 
+**Don't want to type one? Use the `{{…}}` button.** Beside **URL** and
+**Body** there is a small button that turns whatever you have selected into a
+marker. Select the `1` in `192.168.0.1`, tap it, and you get
+`192.168.0.{{i}}`. With just a cursor placed, it inserts a marker there. This
+matters because `§` cannot be typed on a phone keyboard, and selecting then
+tapping is one gesture.
+
 **On a phone, use `{{name}}` instead.** The two are interchangeable everywhere —
 `?user={{user}}&pass={{pass}}` behaves exactly like the `§` form. Braces are
 easy to type on any keyboard; `§` is not, and cannot be typed into a browser
@@ -65,9 +72,13 @@ anything else reads the request.
 from a capture, and the attack is stored against that request's ID — so pick a
 request, then edit the boxes freely.
 
-**If you forget a marker**, **Start attack** stops and tells you, rather than
-firing a wordlist of identical requests. The server enforces this too, so a
-stale browser tab cannot slip one through.
+**If you forget a marker**, the tab tells you before you can start: **Start
+attack** is disabled and a line under it says *"No marker yet…"*, naming what to
+do. There is no modal to dismiss, so the message stays visible while you fix the
+field. A counter beside Start reads `0 markers` or `1 marker (i)`.
+
+The server enforces the same rule, because a browser-side check cannot protect
+against a page loaded before an upgrade.
 
 ### Checking it worked
 
@@ -365,13 +376,16 @@ that posts `stockApi=<url>` in the **body**. Capture that POST, then:
    ```
    stockApi=http://192.168.0.{{i}}:8080/admin
    ```
-2. Paste `1-255` into the wordlist. The label reads `255 words`.
-3. **Start attack**. It can run while you do something else — see
+2. Select the octet you want to enumerate (the `1` in `192.168.0.1`), then tap
+   the `{{…}}` button beside **Body**. It becomes
+   `stockApi=http://192.168.0.{{i}}:8080/admin`.
+3. Paste `1-255` into the wordlist. The label reads `255 words`.
+4. **Start attack**. It can run while you do something else — see
    [leaving an attack running](#leaving-an-attack-running).
-4. Tick **only size outliers**, or sort by **Status**. One address answers with
+5. Tick **only size outliers**, or sort by **Status**. One address answers with
    an admin page; everything else refuses. In the lab, `192.168.0.150` is the
    hit.
-5. Press **View** on it to confirm the exact URL that was sent, then take the
+6. Press **View** on it to confirm the exact URL that was sent, then take the
    winning value to **Repeater** and change the path to
    `/admin/delete?username=carlos`.
 

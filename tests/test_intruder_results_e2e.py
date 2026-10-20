@@ -562,22 +562,75 @@ def test_editing_the_url_drops_the_original_query(page):
     assert all("only=mine" in q for q in PATHS), PATHS[:5]
 
 
-def test_starting_without_a_marker_is_refused(page):
+def test_starting_without_a_marker_is_refused_inline(page):
     """Without a marker every word yields the identical request — a full
-    wordlist of wasted requests and a baffling result table."""
+    wordlist of wasted requests and a baffling result table.
+
+    The refusal is inline and disables Start, rather than a modal: the message
+    has to stay visible while you fix the field it names.
+    """
     page.fill("#iurl", "https://target.example/login?username=admin")
-    page.wait_for_timeout(300)
+    page.wait_for_timeout(400)
+    warn = text(page, "#inomar")
+    assert "No marker yet" in warn, warn
+    assert "{{" in warn, "the hint does not show the typeable marker form"
+    assert page.is_disabled("#istart"), "Start stayed enabled with no marker"
+    assert text(page, "#i-markers") == "0 markers", text(page, "#i-markers")
+
+    # Start is disabled, so there is nothing to click — and no modal to dismiss.
+    dialogs: list[str] = []
+    page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+    assert page.get_attribute("#istart", "disabled") is not None
+    assert dialogs == []
+    assert page.query_selector_all("#iresb tr[data-rid]") == [], "attack ran anyway"
+
+
+def test_one_tap_wraps_the_selected_value_as_a_marker(page):
+    """The lab's exact shape: `192.168.0.1` with payloads 1-255. Select the
+    octet, tap the marker button — no typing, no modal."""
+    page.fill("#iurl", "https://target.example/product?productId=1")
+    page.fill("#ibod", "stockApi=http://192.168.0.1:8080/admin")
+    page.wait_for_timeout(500)
+    assert page.is_disabled("#istart")
+
+    page.evaluate("""() => {
+      const el = document.getElementById('ibod');
+      const i = el.value.indexOf('192.168.0.1') + '192.168.0.'.length;
+      el.focus(); el.setSelectionRange(i, i + 1);
+    }""")
+    page.click('[data-mark="ibod"]')
+    page.wait_for_timeout(400)
+
+    assert page.input_value("#ibod") == "stockApi=http://192.168.0.{{i}}:8080/admin"
+    assert text(page, "#i-markers") == "1 marker (i)", text(page, "#i-markers")
+    assert not page.is_visible("#inomar"), "the warning did not clear"
+    assert not page.is_disabled("#istart"), "Start stayed disabled after marking"
+
+    page.fill("#ipaste", "1-255")
+    page.wait_for_timeout(400)
+    assert page.evaluate("() => iState.words.length") == 255
+
     dialogs: list[str] = []
     page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
     page.click("#istart")
-    page.wait_for_timeout(1200)
-    # The dialog now offers the typeable alias first, so match on "marker"
-    # rather than the old "placeholder" wording.
-    assert any("marker" in d.lower() for d in dialogs), dialogs
-    assert any("{{" in d for d in dialogs), (
-        "the refusal does not mention the typeable {{name}} form: " + str(dialogs)
-    )
-    assert page.query_selector_all("#iresb tr[data-rid]") == [], "attack ran anyway"
+    page.wait_for_timeout(800)
+    assert dialogs == [], dialogs
+    assert "Attack #" in text(page, "#ijob"), text(page, "#ijob")
+
+
+def test_marker_button_with_a_caret_inserts_a_marker(page):
+    """With no selection, the button inserts a marker at the caret."""
+    page.fill("#ibod", "stockApi=http://192.168.0.:8080/admin")
+    page.wait_for_timeout(300)
+    page.evaluate("""() => {
+      const el = document.getElementById('ibod');
+      const i = el.value.indexOf('0.:8080') + 2;
+      el.focus(); el.setSelectionRange(i, i);
+    }""")
+    page.click('[data-mark="ibod"]')
+    page.wait_for_timeout(300)
+    assert "{{i}}" in page.input_value("#ibod")
+    assert not page.is_disabled("#istart")
 
 
 # ── pitchfork rows follow edits to the request ──────────────────────
@@ -770,16 +823,33 @@ def test_marker_name_with_a_quote_cannot_inject_an_attribute(page):
     assert "onmouseover" in page.inner_text("#pf-lists")
 
 
-def test_start_button_recovers_after_a_refused_attack(page):
-    """The handler disabled the button, then returned on error without
-    re-enabling it — and no poll existed to restore it. The tab was dead until
-    a reload."""
-    page.fill("#iurl", "https://target.example/login?username=admin")  # no marker
+def test_start_button_recovers_after_a_server_refusal(page):
+    """A refused start must put the button back.
+
+    The handler disabled it, returned on `data.error`, and left it dead until a
+    page reload — no poll existed to restore it. A missing marker now disables
+    Start before the click, so this exercises a refusal the server returns:
+    a pitchfork over the 10,000-combination cap.
+    """
+    page.fill("#iurl", "https://target.example/login?u=§a§&p=§b§")
     page.wait_for_timeout(300)
-    page.on("dialog", lambda d: d.dismiss())
+    page.click("#i-mode-pitch")
+    page.wait_for_timeout(600)
+    # 101 x 101 = 10201 combinations, just over the cap.
+    page.evaluate("""() => {
+      iState.pitch = {
+        a: { list: "", label: "pasted", words: Array.from({length: 101}, (_, i) => "u" + i) },
+        b: { list: "", label: "pasted", words: Array.from({length: 101}, (_, i) => "p" + i) },
+      };
+      updateIntruderTotal();
+    }""")
+    page.wait_for_timeout(300)
+    dialogs: list[str] = []
+    page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
     page.click("#istart")
     page.wait_for_timeout(1500)
-    assert not page.is_disabled("#istart"), "Start stayed disabled after a refusal"
+    assert dialogs and "10000" in dialogs[0], dialogs
+    assert not page.is_disabled("#istart"), "Start stayed disabled after the refusal"
     assert "Start attack" in text(page, "#istart"), text(page, "#istart")
 
 
@@ -1039,3 +1109,21 @@ def test_winner_can_be_sent_to_the_repeater(page):
     assert "192.168.0.150:8080/admin" in page.input_value("#m-bod")
     assert page.input_value("#m-met").upper() == "POST"
     assert "Intruder result" in text(page, "#rep-origin"), text(page, "#rep-origin")
+
+
+def test_repeater_restores_crlf_for_multipart_bodies(page):
+    """A textarea turns CRLF into LF, but multipart parts are delimited by
+    CRLF. Captured uploads therefore replayed with broken framing, and the
+    server answered "Missing parameter 'csrf'" because the last part was never
+    terminated."""
+    html = page.evaluate("""() => crlfBody(
+        '------b\\nContent-Disposition: form-data; name="csrf"\\n\\nTOKEN\\n------b--\\n',
+        'multipart/form-data; boundary=----b')""")
+    assert "\r\n" in html, repr(html)
+    assert "\nContent-Disposition" not in html.replace("\r\n", ""), repr(html)
+    # A plain body is left alone — no stray CRs added.
+    plain = page.evaluate("() => crlfBody('a\\nb', 'text/plain')")
+    assert plain == "a\nb", repr(plain)
+    # And an upload body with no content-type is still detected by its framing.
+    detected = page.evaluate("""() => crlfBody('--b\\nX: y\\n\\nz\\n--b--\\n', '')""")
+    assert "\r\n" in detected, repr(detected)

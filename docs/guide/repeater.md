@@ -142,6 +142,32 @@ history row reloads that exact response, even if the request has changed since.
 - Tabs are not deleted by the Live tab's **Clear captures**. They are separate
   from the capture database's request rows.
 
+## Replaying an upload (multipart bodies)
+
+If the captured request is a file upload — a `POST` whose content type is
+`multipart/form-data` — two things must both be right or the server answers
+with a missing form field:
+
+1. **Line endings must be CRLF.** The parts of a multipart body are delimited by
+   `CRLF--boundary`. A browser textarea silently converts CRLF to LF, which
+   breaks that framing. The Repeater now restores CRLF automatically for
+   multipart bodies (detected from the content type, or from a body that starts
+   with `--`), so nothing to do.
+2. **Do not hand-edit `Content-Length`.** A captured length describes the body
+   you captured; the moment the body changes — an edited filename, a longer
+   payload — the old value is wrong. Too small and the server reads only part of
+   the body and stops mid-boundary; too large and it waits for bytes that never
+   come. The Repeater and the Intruder now drop it and let the HTTP client
+   compute the real length.
+
+**Symptom of both.** The response is a `400` saying something like
+`Missing parameter 'csrf'`, even though the `csrf` value is visibly in the body.
+It is the *last* part in the body, so it is the first thing lost when the length
+is short.
+
+**Checking.** Open **View → Request sent**; the body should end with
+`--<boundary>--`. If it ends mid-boundary, the length was short.
+
 ## Follow redirects
 
 **What it's for.** By default, Repeater stops at the first response. That is

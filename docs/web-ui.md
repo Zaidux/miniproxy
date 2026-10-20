@@ -269,6 +269,14 @@ Edits **auto-save as you type**, and each tab keeps its **last 50 sends** with
 status and size. Click any entry to bring that response back into the viewer —
 which is how you compare "before" and "after" without re-sending.
 
+
+**Multipart replays.** The Repeater drops any captured `Content-Length` /
+`Transfer-Encoding` and restores CRLF framing for multipart bodies before
+sending. A stale length truncated the body mid-boundary, which a lab reports as
+a missing form field (`Missing parameter 'csrf'`) even though the value is in
+the body. The Intruder does the same, for the same reason: a payload changes the
+body length.
+
 ### Follow redirects
 
 Off by default. A lab that returns `302` is usually redirecting to a login

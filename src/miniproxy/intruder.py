@@ -198,6 +198,12 @@ class Intruder:
             raw_headers = json.loads(raw_headers)
         new_headers = {}
         for k, v in dict(raw_headers).items():
+            # A captured Content-Length describes the *captured* body; the
+            # payload changes its length, so sending the old value truncates
+            # the request (the server reads N bytes and stops mid-part). The
+            # HTTP client recomputes it when absent.
+            if str(k).strip().lower() in ("content-length", "transfer-encoding"):
+                continue
             new_headers[self.replace_placeholders(k, payload, payloads)] = (
                 self.replace_placeholders(v, payload, payloads)
             )
