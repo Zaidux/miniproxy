@@ -12,6 +12,21 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.9.4] — 2026-10-20
+
+### Fixed
+
+- **The CRLF repair was browser-only.** Restoring multipart framing in the
+  Repeater modal fixed the dashboard but left every other path broken: a
+  direct `POST /api/repeater/send` (a supported way to replay a request) and
+  the Intruder both still sent LF-only bodies, so the server could not find the
+  closing boundary and reported the last form field as missing. Normalisation
+  now happens server-side, in the one place every path passes through.
+
+  Verified against the live service: a stored LF body of 325 bytes now arrives
+  as 335 bytes with `CRLF--boundary` framing and is accepted, where it was
+  rejected before.
+
 ## [0.9.3] — 2026-10-20
 
 ### Fixed

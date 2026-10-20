@@ -28,7 +28,7 @@ from flask import (
 from miniproxy import connect as connect_helpers
 from miniproxy import server as proxy_server
 from miniproxy.addon.db import HIGHLIGHT_COLORS, Database
-from miniproxy.intruder import Intruder
+from miniproxy.intruder import Intruder, normalize_multipart_body
 
 app = Flask(__name__)
 db = Database()
@@ -962,6 +962,12 @@ def repeater_send():
         except json.JSONDecodeError:
             raw_headers = {}
     body = data.get("body", "")
+    # A textarea strips CRLF, which breaks multipart framing; the API is a
+    # supported path too, so normalise here rather than trusting the client.
+    if isinstance(raw_headers, dict):
+        ct = next((v for k, v in raw_headers.items()
+                   if str(k).strip().lower() == "content-type"), "")
+        body = normalize_multipart_body(body, ct)
     # Off by default (a lab that redirects is usually redirecting to a login
     # page — silently following hides the 302 you are trying to test).
     follow = bool(data.get("follow_redirects", False))

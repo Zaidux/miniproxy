@@ -330,3 +330,82 @@ def test_intruder_ignores_a_captured_content_length():
     assert "content-length" not in headers, headers
     assert "transfer-encoding" not in headers, headers
     assert "content-type" in headers, headers
+
+
+# ── multipart framing is repaired server-side ───────────────────────
+#
+# The browser restores CRLF, but the API is a supported way to replay a
+# request, and the Intruder substitutes into bodies without a browser at all.
+# So the repair has to happen where every path passes through.
+
+def test_multipart_body_gets_crlf_back():
+    from miniproxy.intruder import normalize_multipart_body
+
+    lf = '--b\nContent-Disposition: form-data; name="csrf"\n\nT\n--b--\n'
+    out = normalize_multipart_body(lf, "multipart/form-data; boundary=--b")
+    assert "\r\n--b--" in out, repr(out)
+    assert "\n" not in out.replace("\r\n", ""), "a bare LF survived"
+
+    # Already-correct bodies are unchanged, and non-multipart bodies untouched.
+    assert normalize_multipart_body(out, "multipart/form-data") == out
+    assert normalize_multipart_body("a\nb", "text/plain") == "a\nb"
+
+
+def test_repeater_sends_a_proper_multipart_body(app_client):
+    """A stored body with LF only (what a textarea produces) must still reach
+    the server with CRLF framing and a correct Content-Length."""
+    import socket
+    import threading
+
+    boundary = "----testboundary"
+    body = (f"--{boundary}\nContent-Disposition: form-data; name=\"csrf\"\n\n"
+            f"TOKEN\n--{boundary}--\n")
+    seen = {}
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0)); srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def serve():
+        conn, _ = srv.accept()
+        try:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += conn.recv(4096)
+            head, _, rest = data.partition(b"\r\n\r\n")
+            length = int(next((l.split(b":", 1)[1] for l in head.split(b"\r\n")
+                               if l.lower().startswith(b"content-length:")), b"0"))
+            while len(rest) < length:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                rest += chunk
+            seen["body"] = rest[:length]
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"
+                         b"Connection: close\r\n\r\nok")
+        finally:
+            conn.close(); srv.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+
+    client, _, _ = app_client
+    r = client.post("/api/repeater/send", json={
+        "method": "POST", "url": f"http://127.0.0.1:{port}/x",
+        "headers": {"Content-Type": f"multipart/form-data; boundary=--{boundary}",
+                    "Content-Length": "533"},
+        "body": body})
+    assert r.status_code == 200, r.get_json()
+    assert ("\r\n--" + boundary + "--").encode() in seen["body"], seen["body"]
+
+
+def test_intruder_payload_in_a_multipart_body_keeps_framing():
+    from miniproxy.intruder import Intruder
+
+    i = Intruder()
+    mod = i._apply_payload(
+        {"method": "POST", "url": "https://t/x",
+         "headers": {"Content-Type": "multipart/form-data; boundary=--b"},
+         "body": f"--b\nContent-Disposition: form-data; name=\"u\"\n\n§u§\n--b--\n"},
+        "admin")
+    assert "\r\n--b--" in mod["body"], repr(mod["body"])
+    assert "admin" in mod["body"]

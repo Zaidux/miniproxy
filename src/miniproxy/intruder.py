@@ -19,6 +19,26 @@ def normalize_markers(text: str) -> str:
     return _ALIAS_RE.sub(lambda m: "§" + m.group(1) + "§", str(text or ""))
 
 
+def normalize_multipart_body(body: str, content_type: str = "") -> str:
+    """Restore CRLF line endings for a ``multipart/*`` body.
+
+    Multipart parts are delimited by ``CRLF--boundary``, and RFC 7578 requires
+    CRLF even when a client sends embedded text. An HTML ``<textarea>``
+    normalises CRLF to LF, so a captured upload loaded into the Repeater (or
+    substituted into by the Intruder) arrives LF-only and the server cannot
+    find the closing boundary — it reports the *last* field as missing.
+
+    Done server-side rather than only in the browser because the API is a
+    supported way to replay a request, and a client-side fix leaves anything
+    that does not go through the modal still broken.
+    """
+    text = str(body or "")
+    if "multipart/" not in str(content_type or "").lower():
+        return text
+    # Collapse then re-expand, so an already-correct body is unchanged.
+    return text.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
 class IntruderError(Exception):
     """Raised when the intruder encounters a fatal error."""
 
@@ -207,6 +227,12 @@ class Intruder:
             new_headers[self.replace_placeholders(k, payload, payloads)] = (
                 self.replace_placeholders(v, payload, payloads)
             )
+        # Multipart framing needs CRLF, and the substituted payload may have
+        # changed the body length — recompute both from the headers that are
+        # actually going out.
+        body = normalize_multipart_body(
+            body, new_headers.get("Content-Type")
+            or new_headers.get("content-type") or "")
         return {
             "method": base.get("method", "GET"),
             "url": url,
