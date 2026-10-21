@@ -1127,3 +1127,87 @@ def test_repeater_restores_crlf_for_multipart_bodies(page):
     # And an upload body with no content-type is still detected by its framing.
     detected = page.evaluate("""() => crlfBody('--b\\nX: y\\n\\nz\\n--b--\\n', '')""")
     assert "\r\n" in detected, repr(detected)
+
+
+# ── browser-TLS replay in the Repeater ──────────────────────────────
+#
+# Cloudflare binds a clearance cookie to the TLS handshake, so the Repeater
+# needs to replay with a real browser fingerprint. The picker must exist, carry
+# the choice through to the request, and explain a challenge rather than
+# showing a bare 403.
+
+def test_repeater_offers_tls_fingerprints(page):
+    page.click('.tab[data-tab="live"]')
+    page.wait_for_timeout(400)
+    page.click("#liveb tr.log-row")
+    page.wait_for_timeout(400)
+    page.click("#d-open-rep")
+    page.wait_for_timeout(800)
+    assert page.is_visible("#rep-modal.open")
+    opts = page.eval_on_selector_all("#m-tls option", "els => els.map(e => e.value)")
+    assert opts[0] == "", "the first option must be the plain (no TLS) mode"
+    meta = page.evaluate("async () => (await api('/api/meta')).data")
+    if meta.get("tls_available"):
+        assert "chrome" in opts, opts
+        assert "firefox" in opts or any(o.startswith("firefox") for o in opts), opts
+        assert page.is_visible("#m-tls"), "the picker is hidden"
+
+
+def test_tls_choice_is_sent_with_the_request(page):
+    page.click('.tab[data-tab="live"]')
+    page.wait_for_timeout(400)
+    page.click("#liveb tr.log-row")
+    page.wait_for_timeout(400)
+    page.click("#d-open-rep")
+    page.wait_for_timeout(800)
+    meta = page.evaluate("async () => (await api('/api/meta')).data")
+    if not meta.get("tls_available"):
+        return
+    # Intercept the API call so nothing goes to the network, and prove the
+    # selection travelled with the payload.
+    page.evaluate("""() => {
+      window.__sent = null;
+      const orig = window.api;
+      window.api = async (url, opts) => {
+        if (url === '/api/repeater/send') {
+          window.__sent = JSON.parse(opts.body);
+          return { ok: true, data: { status_code: 200, headers: {}, body: 'ok',
+                                     challenge: false, tls_profile: JSON.parse(opts.body).impersonate } };
+        }
+        return orig(url, opts);
+      };
+    }""")
+    page.select_option("#m-tls", "chrome")
+    page.wait_for_timeout(200)
+    page.click("#m-send")
+    page.wait_for_timeout(600)
+    assert page.evaluate("() => window.__sent.impersonate") == "chrome"
+    assert "TLS chrome" in text(page, "#m-status"), text(page, "#m-status")
+
+
+def test_challenge_response_is_explained_not_just_a_status(page):
+    """A 403 from a bot wall must say what it is, so the user does not think
+    the replay failed for a normal reason."""
+    page.evaluate("""() => {
+      const orig = window.api;
+      window.api = async (url, opts) => {
+        if (url === '/api/repeater/send') {
+          return { ok: true, data: {
+            status_code: 403, headers: {"cf-mitigated": "challenge"},
+            body: "<title>Just a moment...</title>", challenge: true,
+            tls_profile: "chrome" } };
+        }
+        return orig(url, opts);
+      };
+    }""")
+    page.click('.tab[data-tab="live"]')
+    page.wait_for_timeout(300)
+    page.click("#liveb tr.log-row")
+    page.wait_for_timeout(300)
+    page.click("#d-open-rep")
+    page.wait_for_timeout(700)
+    page.click("#m-send")
+    page.wait_for_timeout(600)
+    out = text(page, "#m-out")
+    assert "Bot-management challenge" in out, out[:200]
+    assert "Rewrite tab" in out, "no fallback suggested: " + out[:300]

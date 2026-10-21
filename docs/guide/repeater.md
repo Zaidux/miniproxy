@@ -142,6 +142,51 @@ history row reloads that exact response, even if the request has changed since.
 - Tabs are not deleted by the Live tab's **Clear captures**. They are separate
   from the capture database's request rows.
 
+## Bot-managed targets (Cloudflare and friends)
+
+**What it's for.** Many production sites put a bot wall in front of their API.
+The Repeater sends a normal `403` with a page titled *Just a moment...* — the
+request never reached the application, so nothing you change in the body makes
+any difference.
+
+**Why headers are not enough.** The clearance cookie (`cf_clearance`) is bound
+to the **TLS handshake and HTTP/2 fingerprint** of the browser that solved the
+challenge, as well as its IP and User-Agent. A plain HTTP client has a different
+handshake, so it gets challenged again however perfect its headers are. Copying
+every header byte-for-byte does not help (verified: identical headers, same
+cookie, same body as the browser — still `403`).
+
+**How to use it.**
+
+1. In the Repeater, set **TLS fingerprint** to the browser you solved the
+   challenge in — `chrome`, `firefox147`, `safari184`, `chrome131_android`, and
+   so on.
+2. Send. The status line shows `TLS chrome` when a fingerprint was used.
+
+**It only works when the profile matches the browser that obtained the cookie.**
+If you solved the challenge in Firefox on Android, no shipped profile matches
+that handshake, and the wall answers again. Solve it in a browser whose profile
+this tool lists — desktop Chrome or Firefox is the easy choice — then replay
+with that profile.
+
+**When it still fails**, the response view says so explicitly rather than
+showing a bare `403`:
+
+> Bot-management challenge, not the application. … If no profile matches your
+> browser, use the Rewrite tab with that browser instead.
+
+**The reliable fallback:** keep the browser (it has the right handshake) and
+change the parameter in flight with [Rewrite](rewrite.md). The browser passes
+the wall; the proxy edits the request; the target sees the modified value.
+
+**Install.** The fingerprint engine is an optional dependency:
+
+```bash
+pip install "riciplay-miniproxy[tls]"
+```
+
+Without it, the picker says so and plain replay still works.
+
 ## Replaying an upload (multipart bodies)
 
 If the captured request is a file upload — a `POST` whose content type is

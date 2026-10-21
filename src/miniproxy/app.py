@@ -26,6 +26,7 @@ from flask import (
 )
 
 from miniproxy import connect as connect_helpers
+from miniproxy import tls_client
 from miniproxy import server as proxy_server
 from miniproxy.addon.db import HIGHLIGHT_COLORS, Database
 from miniproxy.intruder import Intruder, normalize_multipart_body
@@ -942,6 +943,10 @@ def meta():
         "proxy_port": st.get("port"),
         "proxy_pid": st.get("pid"),
         "proxy_host": st.get("host"),
+        # Whether this install can replay with a browser TLS fingerprint, and
+        # which profiles to offer. The dashboard hides the picker when false.
+        "tls_profiles": list(tls_client.PROFILES) if tls_client.available() else [],
+        "tls_available": tls_client.available(),
     })
 
 
@@ -971,9 +976,27 @@ def repeater_send():
     # Off by default (a lab that redirects is usually redirecting to a login
     # page — silently following hides the 302 you are trying to test).
     follow = bool(data.get("follow_redirects", False))
+    # "" / "none" means a plain request (the old behaviour). A browser name asks
+    # for that TLS fingerprint, which is the only way past bot management that
+    # binds a clearance cookie to the client's handshake.
+    try:
+        profile = tls_client.normalize_profile(data.get("impersonate"))
+    except tls_client.TlsClientError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     if not url:
         return jsonify({"error": "URL is required"}), 400
+
+    if profile:
+        try:
+            result = tls_client.send(
+                method, url, _reframe_headers(raw_headers), body,
+                timeout=15, follow_redirects=follow, impersonate=profile,
+            )
+        except tls_client.TlsClientError as exc:
+            return jsonify({"error": str(exc)}), 502
+        result["body"] = (result.get("body") or "")[:MAX_REPEATER_BODY]
+        return jsonify(result)
 
     # requests' own redirect following is used when asked, so the final
     # response and the redirect chain are both reported.
@@ -995,13 +1018,19 @@ def repeater_send():
                     "url": hop.url,
                     "location": hop.headers.get("Location", ""),
                 })
+        body_text = resp.text[:MAX_REPEATER_BODY]
         return jsonify({
             "status_code": resp.status_code,
             "headers": dict(resp.headers),
-            "body": resp.text[:MAX_REPEATER_BODY],
+            "body": body_text,
             "final_url": resp.url,
             "followed": follow,
             "redirects": chain,
+            # Flagged here too, so a plain 403 from a bot wall is explained
+            # rather than looking like a broken request.
+            "challenge": tls_client.looks_like_challenge(
+                resp.status_code, resp.headers, body_text),
+            "tls_profile": None,
         })
     except requests.RequestException as e:
         return jsonify({"error": str(e)}), 500

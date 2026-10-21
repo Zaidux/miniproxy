@@ -12,6 +12,37 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-10-21
+
+### Added
+
+- **Browser-TLS replay in the Repeater.** A **TLS fingerprint** picker replays a
+  request with a real browser's TLS and HTTP/2 handshake (`chrome`,
+  `firefox147`, `safari184`, `chrome131_android`, …), which is the only way
+  through bot management that binds a clearance cookie to the client handshake.
+  Verified with a peer that reports fingerprints: plain `requests` sends
+  `ja4 …h1…` with its own hashes, while each profile produces its own distinct
+  JA3/JA4/HTTP-2 hashes.
+
+  This was prompted by a real block: a captured iFood request returned `200` in
+  the browser and `403` from the Repeater with **byte-identical headers, the
+  same cookie and the same body** — the response being Cloudflare's
+  *Just a moment…* page. Copying headers cannot fix that.
+
+  - The response now carries `challenge: true` when a bot wall answers (header,
+    page title, or a bare 403), so the dashboard explains what happened and
+    points at the Rewrite fallback instead of showing an unexplained status.
+  - Unknown profiles are rejected with the valid list rather than silently
+    falling back to a fingerprint you did not choose.
+  - Optional dependency: `pip install "riciplay-miniproxy[tls]"`. Without it the
+    picker states the install command and plain replay continues to work.
+
+  **Limit, stated plainly:** a profile only helps when it matches the browser
+  that obtained the clearance. A challenge solved in Firefox on Android cannot
+  be replayed by any shipped profile (they are desktop versions). For those
+  targets, use Rewrite with the real browser — the browser keeps its handshake
+  and the proxy edits the request in flight.
+
 ## [0.9.4] — 2026-10-20
 
 ### Fixed

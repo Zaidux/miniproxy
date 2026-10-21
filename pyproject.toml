@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riciplay-miniproxy"
-version = "0.9.4"
+version = "0.9.5"
 description = "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard"
 readme = "README.md"
 license = "MIT"
@@ -31,6 +31,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Browser-TLS replay for the Repeater (Cloudflare/bot-managed targets). It is a
+# compiled wheel, so it stays optional: the Repeater falls back to a plain
+# request and the dashboard shows the install command.
+tls = [
+    "curl_cffi>=0.7",
+]
 dev = [
     "pytest>=8.0",
     "pytest-timeout>=2.2",

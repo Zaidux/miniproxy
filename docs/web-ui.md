@@ -277,6 +277,19 @@ a missing form field (`Missing parameter 'csrf'`) even though the value is in
 the body. The Intruder does the same, for the same reason: a payload changes the
 body length.
 
+### Browser TLS fingerprints
+
+The Repeater can replay with a real browser's TLS and HTTP/2 fingerprint
+(`impersonate` in the request body). That is the only way past bot management
+that binds a clearance cookie to the client handshake — identical headers and
+cookies are not enough, because a plain client's handshake differs.
+
+Requires the optional extra: `pip install "riciplay-miniproxy[tls]"`.
+`/api/meta` reports `tls_available` and `tls_profiles`; a replay returns
+`tls_profile` and `challenge`. `challenge: true` means a bot wall answered
+instead of the application, and the dashboard explains it rather than showing a
+bare 403.
+
 ### Follow redirects
 
 Off by default. A lab that returns `302` is usually redirecting to a login

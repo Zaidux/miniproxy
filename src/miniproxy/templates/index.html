@@ -96,6 +96,11 @@ tbody tr.selected{background:rgba(88,166,255,.14);outline:1px solid rgba(88,166,
 .rep-row{display:flex;gap:10px}
 .rep-row select{width:130px;flex:none}
 .rep-row input{flex:1}
+.rep-label{flex:0 0 auto;font-size:11px;color:var(--muted);align-self:center;
+  text-transform:uppercase;letter-spacing:.04em}
+#m-tls{flex:1;max-width:260px}
+#m-tls-note{flex:1}
+
 .rep-split{display:flex;gap:10px;flex:1;min-height:220px}
 .rep-split .col{flex:1;display:flex;flex-direction:column;min-width:0}
 .rep-split textarea{flex:1;min-height:120px}
@@ -987,6 +992,17 @@ th:last-child{position:sticky;right:0;z-index:3;background:var(--surface)}
           <option>DELETE</option><option>PATCH</option><option>HEAD</option><option>OPTIONS</option>
         </select>
         <input id="m-url" placeholder="https://target/api">
+      </div>
+      <!-- Cloudflare (and friends) bind a clearance cookie to the client's TLS
+           handshake, so a plain HTTP client is re-challenged however complete
+           its headers are. Replaying with that browser's fingerprint is the only
+           way through — and only if it matches the browser that got the cookie. -->
+      <div class="rep-row" id="m-tls-row">
+        <label for="m-tls" class="rep-label">TLS fingerprint</label>
+        <select id="m-tls">
+          <option value="">none (plain request)</option>
+        </select>
+        <span class="text-sm text-muted" id="m-tls-note"></span>
       </div>
       <div class="rep-split">
         <div class="col">
@@ -2279,14 +2295,78 @@ function openRepModal(e) {
 }
 document.getElementById("rep-close").addEventListener("click", () => repModal.classList.remove("open"));
 repModal.addEventListener("click", ev => { if (ev.target === repModal) repModal.classList.remove("open"); });
+// Which TLS profile to replay with. Empty means a plain request.
+function tlsProfile() {
+  const sel = document.getElementById("m-tls");
+  return sel ? sel.value : "";
+}
+
+async function loadTlsProfiles() {
+  const sel = document.getElementById("m-tls");
+  if (!sel || sel.dataset.loaded) return;
+  sel.dataset.loaded = "1";
+  try {
+    const { data } = await api("/api/meta");
+    const profiles = (data && data.tls_profiles) || [];
+    if (!profiles.length) {
+      // No curl_cffi: say so once, and guide the install instead of hiding the
+      // control (a missing control reads as "the feature does not exist").
+      document.getElementById("m-tls-note").innerHTML =
+        "Browser fingerprints need <code>pip install \"riciplay-miniproxy[tls]\"</code>";
+      return;
+    }
+    profiles.forEach(name => {
+      const o = document.createElement("option");
+      o.value = name;
+      o.textContent = name;
+      sel.appendChild(o);
+    });
+    const saved = localStorage.getItem("mp.rep.tls");
+    if (saved) {
+      if (saved === "none") sel.value = "";
+      else if (profiles.includes(saved)) sel.value = saved;
+    }
+    document.getElementById("m-tls-note").textContent =
+      "Use the browser that solved any Cloudflare challenge.";
+  } catch (e) { /* leave "none" */ }
+}
+
 async function sendRepeater(payload) {
+  const profile = tlsProfile();
+  payload.impersonate = profile;
   const { ok, data } = await api("/api/repeater/send", { method: "POST", body: JSON.stringify(payload) });
   if (!ok || data.error) {
     document.getElementById("m-status").textContent = "";
     document.getElementById("m-out").textContent = "Error: " + (data.error || "request failed");
     return;
   }
-  document.getElementById("m-status").innerHTML = 'status <span class="status ' + scls(data.status_code) + '">' + data.status_code + "</span>";
+  const tlsTag = data.tls_profile
+    ? ' <span class="text-sm text-muted">· TLS ' + esc(data.tls_profile) + "</span>"
+    : "";
+  document.getElementById("m-status").innerHTML =
+    'status <span class="status ' + scls(data.status_code) + '">' + data.status_code + "</span>" + tlsTag;
+
+  // A challenge is not a failed replay, it is the bot wall answering instead of
+  // the app. Saying "403" leaves the user thinking the tool is broken.
+  if (data.challenge) {
+    document.getElementById("m-out").textContent =
+      "Bot-management challenge, not the application.\n\n" +
+      "The response is an interstitial (Cloudflare/PerimeterX), so the request\n" +
+      "never reached the target's API. This happens because the clearance cookie\n" +
+      "is bound to the TLS handshake of the browser that solved the challenge.\n\n" +
+      (profile
+        ? "You replayed as TLS '" + profile + "'. If that is not the browser that\n" +
+          "obtained the cookie, the fingerprints differ and it is challenged again.\n" +
+          "Solve the challenge in a browser whose profile this tool lists, then\n" +
+          "replay with that profile."
+        : "Set TLS fingerprint to the browser you solved the challenge in.\n" +
+          "A plain request always fails against bot management.") +
+      "\n\nIf no profile matches your browser, use the Rewrite tab with that\n" +
+      "browser instead: the browser keeps its own handshake and the proxy\n" +
+      "changes the parameter in flight.\n\n---\n" +
+      fmtH(data.headers) + "\n\n" + (data.body || "");
+    return;
+  }
   document.getElementById("m-out").textContent = fmtH(data.headers) + "\n\n" + (data.body || "(empty body)");
 }
 document.getElementById("m-send").addEventListener("click", () => {
@@ -2298,6 +2378,12 @@ document.getElementById("m-send").addEventListener("click", () => {
     body: crlfBody(document.getElementById("m-bod").value, headersText),
   });
 });
+
+document.getElementById("m-tls").addEventListener("change", ev => {
+  saveSession("mp.rep.tls", ev.target.value || "none");
+  loadTlsProfiles();
+});
+loadTlsProfiles();
 document.addEventListener("keydown", ev => {
   if (ev.key === "Escape") repModal.classList.remove("open");
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s" && repModal.classList.contains("open")) {
