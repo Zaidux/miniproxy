@@ -2308,12 +2308,19 @@ async function loadTlsProfiles() {
   try {
     const { data } = await api("/api/meta");
     const profiles = (data && data.tls_profiles) || [];
-    if (!profiles.length) {
+    const hasBrowser = !!(data && data.browser_available);
+    if (!profiles.length && !hasBrowser) {
       // No curl_cffi: say so once, and guide the install instead of hiding the
       // control (a missing control reads as "the feature does not exist").
       document.getElementById("m-tls-note").innerHTML =
         "Browser fingerprints need <code>pip install \"riciplay-miniproxy[tls]\"</code>";
       return;
+    }
+    if (data && data.browser_available) {
+      const ob = document.createElement("option");
+      ob.value = "browser";
+      ob.textContent = "browser (real browser — passes JS challenges)";
+      sel.appendChild(ob);
     }
     profiles.forEach(name => {
       const o = document.createElement("option");
@@ -2340,9 +2347,11 @@ async function sendRepeater(payload) {
     document.getElementById("m-out").textContent = "Error: " + (data.error || "request failed");
     return;
   }
-  const tlsTag = data.tls_profile
-    ? ' <span class="text-sm text-muted">· TLS ' + esc(data.tls_profile) + "</span>"
-    : "";
+  const tlsTag = data.browser
+    ? ' <span class="text-sm text-muted">· via browser</span>'
+    : (data.tls_profile
+        ? ' <span class="text-sm text-muted">· TLS ' + esc(data.tls_profile) + "</span>"
+        : "");
   document.getElementById("m-status").innerHTML =
     'status <span class="status ' + scls(data.status_code) + '">' + data.status_code + "</span>" + tlsTag;
 
@@ -2367,7 +2376,13 @@ async function sendRepeater(payload) {
       fmtH(data.headers) + "\n\n" + (data.body || "");
     return;
   }
-  document.getElementById("m-out").textContent = fmtH(data.headers) + "\n\n" + (data.body || "(empty body)");
+  const dropped = (data.dropped_headers || []);
+  const note = dropped.length
+    ? "Note: a page cannot set " + dropped.join(", ") +
+      " — the browser supplied its own.\n\n"
+    : "";
+  document.getElementById("m-out").textContent =
+    note + fmtH(data.headers) + "\n\n" + (data.body || "(empty body)");
 }
 document.getElementById("m-send").addEventListener("click", () => {
   const headersText = document.getElementById("m-hed").value;

@@ -1211,3 +1211,52 @@ def test_challenge_response_is_explained_not_just_a_status(page):
     out = text(page, "#m-out")
     assert "Bot-management challenge" in out, out[:200]
     assert "Rewrite tab" in out, "no fallback suggested: " + out[:300]
+
+
+def test_repeater_offers_browser_mode(page):
+    """The browser bridge is a mode in the same picker, not a separate tab."""
+    page.click('.tab[data-tab="live"]')
+    page.wait_for_timeout(400)
+    page.click("#liveb tr.log-row")
+    page.wait_for_timeout(400)
+    page.click("#d-open-rep")
+    page.wait_for_timeout(900)
+    meta = page.evaluate("async () => (await api('/api/meta')).data")
+    opts = page.eval_on_selector_all("#m-tls option", "els => els.map(e => e.value)")
+    if meta.get("browser_available"):
+        assert "browser" in opts, opts
+        label = page.eval_on_selector(
+            '#m-tls option[value="browser"]', "e => e.textContent")
+        assert "real browser" in label.lower(), label
+
+
+def test_browser_mode_is_tagged_and_reports_dropped_headers(page):
+    """A page cannot set Host/Cookie/UA; the response must say what changed
+    instead of pretending the replay was byte-faithful."""
+    page.evaluate("""() => {
+      const orig = window.api;
+      window.api = async (url, opts) => {
+        if (url === '/api/repeater/send') {
+          return { ok: true, data: {
+            status_code: 200, headers: {"content-type": "text/html"}, body: "<h1>ok</h1>",
+            browser: true, challenge: false, dropped_headers: ["Cookie", "Host"],
+            tls_profile: null } };
+        }
+        return orig(url, opts);
+      };
+    }""")
+    page.click('.tab[data-tab="live"]')
+    page.wait_for_timeout(300)
+    page.click("#liveb tr.log-row")
+    page.wait_for_timeout(300)
+    page.click("#d-open-rep")
+    page.wait_for_timeout(800)
+    page.select_option("#m-tls", "browser")
+    page.wait_for_timeout(200)
+    page.click("#m-send")
+    page.wait_for_timeout(600)
+    status = text(page, "#m-status")
+    out = text(page, "#m-out")
+    assert "via browser" in status, status
+    assert "Cookie" in out and "cannot set" in out, out[:200]
+    assert "<h1>ok</h1>" in out

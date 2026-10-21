@@ -12,6 +12,33 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.9.6] — 2026-10-21
+
+### Added
+
+- **Replay through a real browser.** A new `browser` mode in the Repeater's
+  TLS picker executes the request inside an actual browser page, so TLS,
+  HTTP/2, cookies, User-Agent and any JavaScript challenge state are native.
+  This is the only replay mode that works when the gate is IP reputation plus a
+  managed challenge rather than the handshake — measured on the case that
+  prompted it, where a matched fingerprint (`firefox154`) and even real Chrome
+  from the same address were both challenged.
+
+  - Attaches to a system Chrome/Chromium (or `MINIPROXY_BROWSER_PATH`), or to a
+    browser you already have open via `MINIPROXY_BROWSER_CDP` — including
+    Android Chrome over USB, which gives the request that device's IP and
+    solved challenge.
+  - Persistent profile at `~/.miniproxy/browser-profile`, so a challenge solved
+    once stays solved. `MINIPROXY_BROWSER_HEADLESS=0` runs headed.
+  - Requests are executed with the page's own `fetch`, so a page's forbidden
+    headers (`Host`, `Cookie`, `User-Agent`, `Content-Length`, `Sec-*`, …) are
+    supplied by the browser. The response lists what was dropped rather than
+    pretending the replay was byte-faithful.
+  - Playwright's "HeadlessChrome" User-Agent is rewritten, since that string is
+    itself a detection signal.
+  - Independent of `curl_cffi`: a machine with a browser but no TLS extra can
+    still use this mode.
+
 ## [0.9.5] — 2026-10-21
 
 ### Added

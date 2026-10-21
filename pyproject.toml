@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riciplay-miniproxy"
-version = "0.9.5"
+version = "0.9.6"
 description = "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard"
 readme = "README.md"
 license = "MIT"
@@ -36,6 +36,9 @@ dependencies = [
 # request and the dashboard shows the install command.
 tls = [
     "curl_cffi>=0.7",
+    # The browser bridge needs Playwright. It also works with a system Chrome
+    # (MINIPROXY_BROWSER_PATH) or an attached one (MINIPROXY_BROWSER_CDP).
+    "playwright>=1.40",
 ]
 dev = [
     "pytest>=8.0",

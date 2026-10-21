@@ -142,6 +142,47 @@ history row reloads that exact response, even if the request has changed since.
 - Tabs are not deleted by the Live tab's **Clear captures**. They are separate
   from the capture database's request rows.
 
+## Replaying through a real browser
+
+**What it's for.** When even a genuine browser is challenged from the same
+address, no header or TLS trick will help — the request has to be *made by* a
+browser that has passed. This mode does exactly that: the request is executed
+inside a real browser page, so TLS, HTTP/2, cookies, UA and any JavaScript
+challenge state are native.
+
+**How to use it.** Set **TLS fingerprint** to
+`browser (real browser — passes JS challenges)` and press Send. The status line
+shows `via browser`.
+
+**Which browser it uses**, in order:
+
+1. `MINIPROXY_BROWSER_PATH` — an explicit Chromium-family binary.
+2. A system `google-chrome` / `chromium` / `msedge`.
+3. Playwright's own build, if installed.
+
+The browser runs headless by default with a persistent profile at
+`~/.miniproxy/browser-profile`, so a challenge solved once stays solved. Set
+`MINIPROXY_BROWSER_HEADLESS=0` to run it headed (needs a display, or Xvfb).
+
+**To use your own signed-in browser instead**, start it with remote debugging
+and point the tool at it — including **Android Chrome over USB**:
+
+```bash
+adb forward tcp:9222 localabstract:chrome_devtools_remote
+export MINIPROXY_BROWSER_CDP=http://127.0.0.1:9222
+```
+
+That is the strongest option: the request is made by the browser on your phone,
+with its IP and its solved challenge.
+
+**What it cannot set.** A page's `fetch` is not allowed to choose `Host`,
+`Cookie`, `User-Agent`, `Content-Length`, `Origin`, `Referer` or `Sec-*`
+headers — the browser supplies its own. The response view lists any that were
+dropped, so you can see the replay was not byte-faithful.
+
+**Install.** `pip install "riciplay-miniproxy[tls]"` brings Playwright; a system
+Chrome works without it.
+
 ## Bot-managed targets (Cloudflare and friends)
 
 **What it's for.** Many production sites put a bot wall in front of their API.

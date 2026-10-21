@@ -6,4 +6,4 @@ timing, and a RULES-style scope guard with skip/block modes — plus a Flask
 dashboard (Log / Repeater / Intruder) and a small manager CLI.
 """
 
-__version__ = "0.9.5"
+__version__ = "0.9.6"

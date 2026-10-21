@@ -26,7 +26,7 @@ from flask import (
 )
 
 from miniproxy import connect as connect_helpers
-from miniproxy import tls_client
+from miniproxy import browser_client, tls_client
 from miniproxy import server as proxy_server
 from miniproxy.addon.db import HIGHLIGHT_COLORS, Database
 from miniproxy.intruder import Intruder, normalize_multipart_body
@@ -947,6 +947,9 @@ def meta():
         # which profiles to offer. The dashboard hides the picker when false.
         "tls_profiles": list(tls_client.PROFILES) if tls_client.available() else [],
         "tls_available": tls_client.available(),
+        # A real browser can make the request where a fingerprint cannot: it
+        # brings native TLS, cookies and whatever JS challenge state exists.
+        "browser_available": browser_client.available(),
     })
 
 
@@ -979,13 +982,33 @@ def repeater_send():
     # "" / "none" means a plain request (the old behaviour). A browser name asks
     # for that TLS fingerprint, which is the only way past bot management that
     # binds a clearance cookie to the client's handshake.
-    try:
-        profile = tls_client.normalize_profile(data.get("impersonate"))
-    except tls_client.TlsClientError as exc:
-        return jsonify({"error": str(exc)}), 400
+    # "browser" is a mode, not a TLS profile, so it must be recognised before
+    # normalize_profile() rejects it as an unknown name.
+    want_browser = str(data.get("impersonate") or "").strip().lower() in (
+        "browser", "real-browser")
+    profile = None
+    if not want_browser:
+        try:
+            profile = tls_client.normalize_profile(data.get("impersonate"))
+        except tls_client.TlsClientError as exc:
+            return jsonify({"error": str(exc)}), 400
 
     if not url:
         return jsonify({"error": "URL is required"}), 400
+
+    # "browser" is not a TLS profile: it hands the request to a real browser,
+    # which is the only mode that survives a managed challenge (native TLS, UA,
+    # cookies and JS challenge state).
+    if want_browser:
+        try:
+            result = browser_client.send(
+                method, url, _reframe_headers(raw_headers), body,
+                follow=follow,
+            )
+        except browser_client.BrowserError as exc:
+            return jsonify({"error": str(exc)}), 502
+        result["body"] = (result.get("body") or "")[:MAX_REPEATER_BODY]
+        return jsonify(result)
 
     if profile:
         try:
