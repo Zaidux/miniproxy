@@ -8,13 +8,20 @@
 // rather than a silent failure.
 
 const { spawn } = require('child_process');
+const { candidates, check, target } = require('../scripts/runtime');
 
 const args = process.argv.slice(2);
-const proc = spawn('python3', ['-m', 'miniproxy', ...args], { stdio: 'inherit' });
+const python = candidates().find(p => check(p));
+if (!python) {
+  console.error(`Error: matching MiniProxy ${target} on Python 3.12+ with safe, non-overlapping proxy dependencies not found.`);
+  console.error('Use a fresh venv and set MINIPROXY_PYTHON to its Python executable. See docs/setup.md.');
+  process.exit(1);
+}
+const proc = spawn(python, ['-m', 'miniproxy', ...args], { stdio: 'inherit' });
 
 proc.on('error', (err) => {
   if (err.code === 'ENOENT') {
-    console.error('Error: python3 not found. MiniProxy is a Python tool — install Python 3.10+ first.');
+    console.error('Error: selected Python executable disappeared. MiniProxy needs Python 3.12+.');
     process.exit(1);
   }
   console.error('Error:', err.message);

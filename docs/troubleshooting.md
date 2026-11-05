@@ -29,7 +29,7 @@ other tools depend on) — see
 The capture engine is missing.
 
 ```bash
-pip install mitmproxy
+python -m pip install riciplay-mitmproxy==12.3.1.1
 mitmdump --version
 ```
 

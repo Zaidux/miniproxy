@@ -6,38 +6,35 @@
 // install it. Failures are warnings, not errors: the user may be
 // installing without network access or managing Python themselves.
 
-const { execSync, spawnSync } = require('child_process');
-const os = require('os');
+const { spawnSync } = require('child_process');
+const { target, candidates, check, supportedPython } = require('./runtime');
 
 console.log('\n🔌 Installing MiniProxy (HTTP/S interception proxy)...\n');
 
-const isWin = os.platform() === 'win32';
-const python = isWin ? 'python' : 'python3';
-const pip = isWin ? 'pip' : 'pip3';
-
-function hasCommand(cmd) {
-  try {
-    execSync(`${cmd} --version`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 try {
-  const probe = spawnSync(python, ['-c', 'import miniproxy'], { stdio: 'ignore' });
-  if (probe.status === 0) {
-    console.log('✓ Python package `miniproxy` already importable.');
+  const all = candidates();
+  if (all.some(python => check(python))) {
+    console.log(`✓ Matching MiniProxy ${target} and safe proxy dependencies found.`);
   } else {
-    console.log('Installing riciplay-miniproxy from PyPI...');
-    execSync(`${pip} install --upgrade riciplay-miniproxy`, { stdio: 'inherit' });
-    console.log('✓ Installed riciplay-miniproxy.');
+    const python = all.find(p => supportedPython(p));
+    if (!python) throw new Error('Python 3.12+ not found');
+    // Do not mutate an overlapping install: uninstalling either distribution
+    // removes files owned by the other. Operators must migrate explicitly.
+    const overlap = spawnSync(python, ['-c',
+      'from importlib.metadata import version,PackageNotFoundError\ntry: version("mitmproxy")\nexcept PackageNotFoundError: raise SystemExit(0)\nraise SystemExit(1)'],
+      { timeout: 10000, stdio: 'ignore' });
+    if (overlap.status !== 0) throw new Error('Upstream mitmproxy detected or could not be checked; use a fresh venv');
+    const install = spawnSync(python, ['-m', 'pip', 'install', '--upgrade', `riciplay-miniproxy==${target}`],
+      { stdio: 'inherit' });
+    if (install.status !== 0 || !check(python)) throw new Error('Install failed or runtime verification failed');
+    console.log(`✓ Installed and verified MiniProxy ${target}.`);
   }
 } catch (err) {
   console.warn(
     `\n⚠ Could not install the Python package automatically (${err.message}).\n` +
-    '  MiniProxy needs Python 3.10+ and mitmproxy. Install manually with:\n' +
-    '    pip install riciplay-miniproxy\n'
+    '  MiniProxy needs Python 3.12+ and a non-overlapping fork environment.\n' +
+    `  In a fresh venv: python -m pip install riciplay-miniproxy==${target}\n` +
+    '  Set MINIPROXY_PYTHON to that environment’s Python executable.\n'
   );
 }
 

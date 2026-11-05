@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -47,3 +47,6 @@ jobs:
         run: |
           sed -n '/<script>/,/<\/script>/p' src/miniproxy/templates/index.html | sed '1d;$d' > /tmp/spa.js
           node --check /tmp/spa.js
+
+      - name: npm launcher regression
+        run: npm test

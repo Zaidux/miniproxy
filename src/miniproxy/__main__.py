@@ -424,6 +424,12 @@ def _cmd_noise(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    args_in = sys.argv[1:] if argv is None else argv
+    if args_in == ["launcher-info"]:
+        import json
+        from miniproxy.runtime import runtime_info
+        print(json.dumps(runtime_info()))
+        return 0
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -527,6 +533,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["status"] == "running" else 1
 
     if args.command == "dashboard":
+        from miniproxy.runtime import environment_error
+        error = environment_error()
+        if error:
+            print(error, file=sys.stderr)
+            return 1
         import miniproxy.app as appmod
         dash_port = args.port
         if dash_port == "auto":

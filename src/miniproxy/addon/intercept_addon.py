@@ -163,6 +163,10 @@ class InterceptAddon:
 
     def __init__(self) -> None:
         self.db = Database()
+        from miniproxy.scope import load_scope, load_policy
+        self.scope, self.scope_mode = load_scope()
+        self.allowed_scope = load_policy("MINIPROXY_RULES_SCOPE")
+        self.excluded_scope = load_policy("MINIPROXY_EXCLUDE_SCOPE")
         self._init_queue()
         self._init_decisions()
         # Read the SAME key that set_intercept() writes ('intercept').
@@ -287,6 +291,15 @@ class InterceptAddon:
 
     async def request(self, flow: HTTPFlow) -> None:
         """Intercept request: pause, queue, and wait for decision (async)."""
+        from miniproxy.scope import request_in_scope
+        def allowed(url):
+            return request_in_scope(url, getattr(self, "scope", None),
+                                    getattr(self, "allowed_scope", None), getattr(self, "excluded_scope", None))
+        if not allowed(flow.request.pretty_url):
+            if getattr(self, "scope_mode", "skip") == "block":
+                from mitmproxy.http import Response
+                flow.response = Response.make(403, b"Out of scope")
+            return
         if not self._intercept_enabled:
             return
 
@@ -344,6 +357,9 @@ class InterceptAddon:
             flow.kill()
         elif action == "modify":
             modified = decision.get("modified_request", {})
+            if modified.get("url") and not allowed(modified["url"]):
+                flow.kill()
+                return
             if modified.get("method"):
                 flow.request.method = modified["method"]
             if modified.get("url"):

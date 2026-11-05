@@ -11,8 +11,8 @@ not each have their own copy.
 
 ## 1. Install
 
-Python 3.10 or newer is required, plus `mitmproxy` (which provides the
-`mitmdump` binary).
+Python 3.12 or newer is required. MiniProxy installs `riciplay-mitmproxy`
+(which provides `mitmdump`); do not also install the upstream distribution.
 
 ```bash
 pipx install riciplay-miniproxy
@@ -37,8 +37,9 @@ mitmdump --version
 **Common mistakes / notes.**
 
 - If `miniproxy start` fails saying `mitmdump` was not found, install
-  `mitmproxy` in the same environment (`pipx inject riciplay-miniproxy
-  mitmproxy`, or `pip install mitmproxy` inside the venv).
+  the maintained distribution in the same environment (`pipx inject
+  riciplay-miniproxy riciplay-mitmproxy==12.3.1.1`, or reinstall MiniProxy
+  inside the venv). See Setup for overlap checks and safe migration.
 - The npm package is only a launcher. The real code is the Python package.
 
 ## 2. Start the proxy and the dashboard

@@ -2,7 +2,7 @@
 
 ## 1. Install
 
-**Python 3.10+ required** (check with `python3 --version`).
+**Python 3.12+ required** (check with `python3 --version`).
 
 ```bash
 # From PyPI (recommended)
@@ -56,19 +56,53 @@ miniproxy --help
 miniproxy version
 ```
 
-## 2. Install mitmproxy (the capture engine)
+## 2. Capture engine and safe migration
 
 MiniProxy is a manager + UI layer on top of
-[mitmproxy](https://mitmproxy.org/):
+[mitmproxy](https://mitmproxy.org/). MiniProxy 0.9.7 installs the separately named
+`riciplay-mitmproxy==12.3.1.1` distribution, based on exact upstream 12.3.1,
+so dependency resolution can select security-fixed Tornado 6.6. Imports and the
+`mitmdump`/`mitmweb` scripts keep their upstream names. The fork's provenance,
+maintenance boundary and retirement plan are documented in
+[RICIPLAY_FORK.md](https://github.com/Zaidux/mitmproxy/blob/releases/riciplay-12.3.1.1/RICIPLAY_FORK.md).
 
 ```bash
-pip install mitmproxy        # provides the `mitmdump` binary
+python -m pip install riciplay-miniproxy==0.9.7  # includes the capture engine
 mitmdump --version
 ```
 
 If `mitmdump` is missing, `miniproxy start` fails with a clear error
 instead of half-starting — see
 [Troubleshooting → "mitmdump not found"](troubleshooting.md#mitmdump-not-found--proxy-wont-start).
+
+**Never install upstream `mitmproxy` alongside `riciplay-mitmproxy`.** Pip treats
+them as distinct distributions despite shared files, so uninstalling either may
+break the other. MiniProxy and its npm launcher reject overlapping metadata and
+unsafe versions; installers never automatically remove the old distribution.
+Startup also verifies that imports and `mitmdump` are owned by the fork in the
+active environment. `--mitmdump` may name that same launcher (or a symlink to it),
+not an unrelated executable with a matching version banner.
+Shutdown requires a matching persisted process creation identity and owned
+process group. Legacy state without that identity is not sufficient to kill a
+process; manually retire a verified legacy proxy before starting a new one.
+
+For an existing upstream environment, stop running proxy processes explicitly,
+then create a new environment without modifying captures, CA files or credentials:
+
+```bash
+python3.12 -m venv ~/.venvs/miniproxy-0.9.7
+~/.venvs/miniproxy-0.9.7/bin/python -m pip install riciplay-miniproxy==0.9.7
+~/.venvs/miniproxy-0.9.7/bin/python -m pip check
+~/.venvs/miniproxy-0.9.7/bin/miniproxy version
+export MINIPROXY_PYTHON="$HOME/.venvs/miniproxy-0.9.7/bin/python" # npm launcher
+```
+
+Keep the old environment until the new one passes capture/readback validation.
+If both distributions have already been installed together, do not rely on
+uninstalling just one to repair it: migrate to a fresh environment instead.
+The fork will be replaced by an official mitmproxy release only after safe
+Tornado metadata and compatibility/audit gates pass. npm publication requires
+the matching Python release to be publicly available first.
 
 ## 3. First run
 

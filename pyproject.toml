@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riciplay-miniproxy"
-version = "0.9.6"
+version = "0.9.7"
 description = "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [
     {name = "Zaidux"},
 ]
@@ -24,7 +24,10 @@ classifiers = [
     "Topic :: Internet :: Proxy Servers",
 ]
 dependencies = [
-    "mitmproxy>=10.0.0",
+    # One distribution owns mitmproxy imports/scripts; never install both.
+    "riciplay-mitmproxy==12.3.1.1",
+    "tornado>=6.6,<7",
+    "packaging>=26.3,<27",
     "Flask>=3.0.0",
     "requests>=2.31.0",
     "textual>=0.40.0",
@@ -43,6 +46,7 @@ tls = [
 dev = [
     "pytest>=8.0",
     "pytest-timeout>=2.2",
+    "playwright>=1.40",
 ]
 
 [project.scripts]

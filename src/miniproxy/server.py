@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import socket
 import subprocess
 import sys
@@ -33,6 +32,9 @@ DASH_PORT_FILE = STATE_DIR / "dashboard.port"
 DASH_HOST_FILE = STATE_DIR / "dashboard.host"
 DEFAULT_PORT = 8080
 DEFAULT_DASH_PORT = 5000
+# Recovery ownership when a filesystem error interrupts provisional publication.
+# Never substitute these anchors for a different PID read from disk.
+_PENDING_PROCESSES: dict[Path, tuple[int, str]] = {}
 
 
 def _dashboard_display_host(bind_host: str) -> str:
@@ -70,7 +72,8 @@ def _read_pid() -> Optional[int]:
     try:
         return int(PID_FILE.read_text().strip())
     except (OSError, ValueError):
-        return None
+        pending = _PENDING_PROCESSES.get(PID_FILE)
+        return pending[0] if pending else None
 
 
 def _process_exists(pid: int) -> bool:
@@ -79,23 +82,6 @@ def _process_exists(pid: int) -> bool:
         return True
     except OSError:
         return False
-
-
-def _pid_matches(pid: int, *needles: str) -> bool:
-    """True if /proc/<pid>/cmdline contains every needle (pid-reuse guard).
-
-    A stale pid file can point at a recycled PID belonging to a totally
-    unrelated process; before trusting or killing it, verify the command
-    line actually looks like ours. Non-Linux platforms (no /proc) skip
-    the check and keep the old behavior.
-    """
-    try:
-        with open(f"/proc/{pid}/cmdline", "rb") as fh:
-            cmdline = fh.read().decode("utf-8", "replace")
-    except OSError:
-        return True  # cannot verify — assume match (macOS/Windows)
-    lowered = cmdline.lower()
-    return all(n.lower() in lowered for n in needles)
 
 
 def _port_free(port: int) -> bool:
@@ -156,13 +142,77 @@ def _write_state(path: Path, text: str) -> None:
     path.write_text(text)
 
 
-def _wait_listening(port: int, proc: subprocess.Popen, timeout: float = 8.0) -> bool:
+def _write_process_identity(path: Path, pid: int) -> None:
+    from miniproxy.runtime import process_identity
+    _write_state(path.with_suffix(".identity"), process_identity(pid))
+
+
+def _owned_process(path: Path, pid: int) -> bool:
+    from miniproxy.runtime import process_identity
+    try:
+        identity = path.with_suffix(".identity").read_text().strip()
+    except OSError:
+        pending = _PENDING_PROCESSES.get(path)
+        identity = pending[1] if pending and pending[0] == pid else ""
+    return bool(identity) and process_identity(pid) == identity
+
+
+def _stop_owned_group(path: Path, pid: int) -> bool:
+    from miniproxy.runtime import terminate_process_group
+    try:
+        identity = path.with_suffix(".identity").read_text().strip()
+    except OSError:
+        pending = _PENDING_PROCESSES.get(path)
+        identity = pending[1] if pending and pending[0] == pid else ""
+    return terminate_process_group(pid, identity)
+
+
+def _clear_process_state(pid_path: Path, port_path: Path, host_path: Path) -> None:
+    for path in (pid_path, pid_path.with_suffix(".identity"), port_path, host_path):
+        path.unlink(missing_ok=True)
+    _PENDING_PROCESSES.pop(pid_path, None)
+
+
+def _publish_process_state(proc, pid_path: Path, port_path: Path,
+                           host_path: Path, port: int, host: str) -> bool:
+    """Publish provisional ownership, or retire the exact child on failure.
+
+    Cleanup uses the creation identity captured from Popen, not partially
+    written disk state. If cleanup is ambiguous, keep/retry the recovery anchor
+    rather than advertise success or delete the only way to find the child.
+    """
+    from miniproxy.runtime import process_identity, terminate_process_group
+    identity = process_identity(proc.pid)
+    _PENDING_PROCESSES[pid_path] = (proc.pid, identity)
+    try:
+        if not identity:
+            raise RuntimeError("Spawned process identity is unavailable")
+        _write_state(pid_path, str(proc.pid))
+        _write_state(pid_path.with_suffix(".identity"), identity)
+        _write_state(port_path, str(port))
+        _write_state(host_path, host)
+    except Exception:
+        if terminate_process_group(proc.pid, identity):
+            proc.wait(timeout=3)
+            _clear_process_state(pid_path, port_path, host_path)
+        else:
+            for path, value in ((pid_path, str(proc.pid)),
+                                (pid_path.with_suffix(".identity"), identity)):
+                try:
+                    _write_state(path, value)
+                except OSError:
+                    pass  # the in-memory anchor still allows same-process stop
+        return False
+    return True
+
+
+def _wait_listening(port: int, proc: subprocess.Popen, timeout: float = 30.0) -> bool:
     """Poll until the proxy accepts connections (or the process dies)."""
     return _wait_listening_on("127.0.0.1", port, proc, timeout)
 
 
 def _wait_listening_on(
-    host: str, port: int, proc: subprocess.Popen, timeout: float = 8.0,
+    host: str, port: int, proc: subprocess.Popen, timeout: float = 30.0,
 ) -> bool:
     """Poll until <host>:port accepts TCP connections (or the process dies)."""
     deadline = time.monotonic() + timeout
@@ -181,7 +231,8 @@ def _read_dash_pid() -> Optional[int]:
     try:
         return int(DASH_PID_FILE.read_text().strip())
     except (OSError, ValueError):
-        return None
+        pending = _PENDING_PROCESSES.get(DASH_PID_FILE)
+        return pending[0] if pending else None
 
 
 def _read_dash_port() -> Optional[int]:
@@ -279,9 +330,16 @@ def start(
     # true and with_dashboard=False could never suppress it. The explicit flag
     # wins when given: the header's Start button passes False meaning "proxy
     # only", and used to spawn a second dashboard instead.
+    from miniproxy.runtime import resolve_mitmdump
+    try:
+        mitmdump_path = resolve_mitmdump(mitmdump_path)
+    except RuntimeError as exc:
+        return {"status": "error", "message": str(exc)}
     want_dashboard = dashboard if with_dashboard is None else bool(with_dashboard)
     pid = _read_pid()
-    if pid is not None and _process_exists(pid) and _pid_matches(pid, "mitmdump"):
+    if pid is not None and _process_exists(pid):
+        if not _owned_process(PID_FILE, pid):
+            return {"status": "error", "pid": pid, "message": "Proxy ownership is unverified; existing state retained."}
         running_port = _read_port()
         result = {
             "status": "already_running",
@@ -300,9 +358,10 @@ def start(
         return result
     if pid is not None:
         # Dead or recycled PID — clean the stale state and start fresh.
-        PID_FILE.unlink(missing_ok=True)
-        PORT_FILE.unlink(missing_ok=True)
-        HOST_FILE.unlink(missing_ok=True)
+        from miniproxy.runtime import process_group_exited
+        if not process_group_exited(pid):
+            return {"status": "error", "pid": pid, "message": "Proxy leader exited but group termination is unconfirmed; state retained."}
+        _clear_process_state(PID_FILE, PORT_FILE, HOST_FILE)
 
     script = addon_path()
     if not script.exists():
@@ -351,12 +410,18 @@ def start(
         )
     except FileNotFoundError:
         return {"status": "error",
-                "message": f"'{mitmdump_path}' not found — install mitmproxy "
-                           "(pip install mitmproxy) or pass --mitmdump."}
+                "message": f"'{mitmdump_path}' not found — install mitmproxy's maintained distribution "
+                           "(python -m pip install riciplay-mitmproxy==12.3.1.1) in the active environment."}
     except OSError as exc:
         return {"status": "error", "message": f"failed to launch mitmdump: {exc}"}
+    # Provisional ownership remains available even when readiness fails.
+    if not _publish_process_state(proc, PID_FILE, PORT_FILE, HOST_FILE, port, proxy_host):
+        return {"status": "error", "pid": proc.pid, "message": "Proxy ownership publication failed; startup aborted. " +
+                ("Cleanup unconfirmed; recovery ownership retained." if PID_FILE in _PENDING_PROCESSES else "Process group stopped.")}
     time.sleep(0.5)
     if proc.poll() is not None:
+        if _stop_owned_group(PID_FILE, proc.pid):
+            _clear_process_state(PID_FILE, PORT_FILE, HOST_FILE)
         return {"status": "error",
                 "message": f"mitmdump exited immediately (code {proc.returncode}). "
                            "Is mitmproxy installed?"}
@@ -371,21 +436,15 @@ def start(
     else:
         ready = _wait_listening_on(proxy_host, port, proc)
     if not ready:
-        try:
-            proc.terminate()
+        cleaned = _stop_owned_group(PID_FILE, proc.pid)
+        if cleaned:
             proc.wait(timeout=3)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            _clear_process_state(PID_FILE, PORT_FILE, HOST_FILE)
         return {"status": "error",
-                "message": f"mitmdump did not bind {probe_host}:{port} within 8s "
-                           f"(PID {proc.pid}); the process was stopped."}
+                "message": f"mitmdump did not bind {probe_host}:{port} within 30s "
+                           f"(PID {proc.pid}); " + ("the process was stopped." if cleaned else
+                           "cleanup unconfirmed; ownership state retained.")}
 
-    _write_state(PID_FILE, str(proc.pid))
-    _write_state(PORT_FILE, str(port))
-    _write_state(HOST_FILE, proxy_host)
     scope_note = (
         f", scope={len(hosts)} host(s) (out-of-scope: "
         f"{env.get('MINIPROXY_SCOPE_MODE', 'skip')})" if hosts else ""
@@ -424,7 +483,9 @@ def _ensure_dashboard(
     ``url`` reflect what actually bound).
     """
     dash_pid = _read_dash_pid()
-    if dash_pid is not None and _process_exists(dash_pid) and _pid_matches(dash_pid, "miniproxy", "dashboard"):
+    if dash_pid is not None and _process_exists(dash_pid):
+        if not _owned_process(DASH_PID_FILE, dash_pid):
+            return {"status": "error", "pid": dash_pid, "message": "Dashboard ownership is unverified; existing state retained."}
         port_running = _read_dash_port() or dash_port
         # Prefer the bind address recorded at launch. Otherwise a later
         # `miniproxy start` with the default loopback option would make an
@@ -442,9 +503,10 @@ def _ensure_dashboard(
             "message": f"Dashboard already running at http://{display_host}:{port_running}",
         }
     if dash_pid is not None:
-        DASH_PID_FILE.unlink(missing_ok=True)
-        DASH_PORT_FILE.unlink(missing_ok=True)
-        DASH_HOST_FILE.unlink(missing_ok=True)
+        from miniproxy.runtime import process_group_exited
+        if not process_group_exited(dash_pid):
+            return {"status": "error", "pid": dash_pid, "message": "Dashboard leader exited but group termination is unconfirmed; state retained."}
+        _clear_process_state(DASH_PID_FILE, DASH_PORT_FILE, DASH_HOST_FILE)
 
     resolved = _resolve_port(dash_port)
     if resolved is None:
@@ -478,13 +540,14 @@ def _ensure_dashboard(
     except OSError as exc:
         return {"status": "error", "message": f"failed to launch dashboard: {exc}"}
 
+    if not _publish_process_state(proc, DASH_PID_FILE, DASH_PORT_FILE, DASH_HOST_FILE, dash_port, dash_host):
+        return {"status": "error", "pid": proc.pid, "message": "Dashboard ownership publication failed; startup aborted. " +
+                ("Cleanup unconfirmed; recovery ownership retained." if DASH_PID_FILE in _PENDING_PROCESSES else "Process group stopped.")}
+
     deadline = time.monotonic() + 8.0
     while time.monotonic() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", dash_port), timeout=0.4):
-                _write_state(DASH_PID_FILE, str(proc.pid))
-                _write_state(DASH_PORT_FILE, str(dash_port))
-                _write_state(DASH_HOST_FILE, dash_host)
                 display_host = _dashboard_display_host(dash_host)
                 return {
                     "status": "started",
@@ -501,33 +564,39 @@ def _ensure_dashboard(
                 }
         except OSError:
             if proc.poll() is not None:
+                if _stop_owned_group(DASH_PID_FILE, proc.pid):
+                    _clear_process_state(DASH_PID_FILE, DASH_PORT_FILE, DASH_HOST_FILE)
                 return {
                     "status": "error",
                     "message": f"dashboard exited immediately (code {proc.returncode}) — "
                                "port already in use? Pass --dashboard-port.",
                 }
             time.sleep(0.15)
+    cleaned = _stop_owned_group(DASH_PID_FILE, proc.pid)
+    if cleaned:
+        proc.wait(timeout=3)
+        _clear_process_state(DASH_PID_FILE, DASH_PORT_FILE, DASH_HOST_FILE)
     return {
         "status": "error",
-        "message": f"dashboard did not bind :{dash_port} within 8s",
+        "message": f"dashboard did not bind :{dash_port} within 8s; " +
+                   ("process stopped." if cleaned else "cleanup unconfirmed; ownership state retained."),
     }
 
 
 def stop_dashboard() -> dict[str, Any]:
     """Stop the dashboard daemon (if any); the proxy is unaffected."""
     dash_pid = _read_dash_pid()
-    if dash_pid is None or not _process_exists(dash_pid) or not _pid_matches(dash_pid, "miniproxy", "dashboard"):
-        DASH_PID_FILE.unlink(missing_ok=True)
-        DASH_PORT_FILE.unlink(missing_ok=True)
-        DASH_HOST_FILE.unlink(missing_ok=True)
+    if dash_pid is None or not _process_exists(dash_pid):
+        from miniproxy.runtime import process_group_exited
+        if dash_pid is not None and not process_group_exited(dash_pid):
+            return {"status": "error", "message": "Dashboard group termination unconfirmed; ownership state retained."}
+        _clear_process_state(DASH_PID_FILE, DASH_PORT_FILE, DASH_HOST_FILE)
         return {"status": "not_running", "message": "Dashboard is not running."}
-    try:
-        os.killpg(os.getpgid(dash_pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
-    DASH_PID_FILE.unlink(missing_ok=True)
-    DASH_PORT_FILE.unlink(missing_ok=True)
-    DASH_HOST_FILE.unlink(missing_ok=True)
+    if not _owned_process(DASH_PID_FILE, dash_pid):
+        return {"status": "error", "message": "Dashboard process ownership is unverified; no process was signalled."}
+    if not _stop_owned_group(DASH_PID_FILE, dash_pid):
+        return {"status": "error", "message": "Dashboard termination unconfirmed; ownership state retained."}
+    _clear_process_state(DASH_PID_FILE, DASH_PORT_FILE, DASH_HOST_FILE)
     return {"status": "stopped", "message": f"Dashboard stopped (PID {dash_pid})."}
 
 
@@ -535,21 +604,20 @@ def stop() -> dict[str, Any]:
     pid = _read_pid()
     if pid is None:
         return {"status": "not_running", "message": "No PID file — nothing to stop."}
-    if not _process_exists(pid) or not _pid_matches(pid, "mitmdump"):
-        PID_FILE.unlink(missing_ok=True)
-        PORT_FILE.unlink(missing_ok=True)
-        HOST_FILE.unlink(missing_ok=True)
+    if not _process_exists(pid):
+        from miniproxy.runtime import process_group_exited
+        if not process_group_exited(pid):
+            return {"status": "error", "message": "Proxy group termination unconfirmed; ownership state retained."}
+        _clear_process_state(PID_FILE, PORT_FILE, HOST_FILE)
         return {
             "status": "not_running",
             "message": f"PID {pid} was stale (dead or not mitmdump) — cleaned.",
         }
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
-    PID_FILE.unlink(missing_ok=True)
-    PORT_FILE.unlink(missing_ok=True)
-    HOST_FILE.unlink(missing_ok=True)
+    if not _owned_process(PID_FILE, pid):
+        return {"status": "error", "message": "Proxy process ownership is unverified; no process was signalled."}
+    if not _stop_owned_group(PID_FILE, pid):
+        return {"status": "error", "message": "Proxy termination unconfirmed; ownership state retained."}
+    _clear_process_state(PID_FILE, PORT_FILE, HOST_FILE)
     return {"status": "stopped", "message": f"MiniProxy terminated (PID {pid})."}
 
 
@@ -562,13 +630,17 @@ def _read_port() -> Optional[int]:
 
 def status() -> dict[str, Any]:
     pid = _read_pid()
-    if pid is None or not _process_exists(pid) or not _pid_matches(pid, "mitmdump"):
+    if pid is None or not _process_exists(pid):
+        from miniproxy.runtime import process_group_exited
+        if pid is not None and not process_group_exited(pid):
+            return {"status": "error", "pid": pid, "message": "Proxy group termination unconfirmed; ownership state retained."}
         if pid is not None:
-            PID_FILE.unlink(missing_ok=True)
-            PORT_FILE.unlink(missing_ok=True)
-            HOST_FILE.unlink(missing_ok=True)
+            _clear_process_state(PID_FILE, PORT_FILE, HOST_FILE)
         return {"status": "not_running", "pid": None, "port": None,
                 "host": None, "message": "MiniProxy is not running."}
+    if not _owned_process(PID_FILE, pid):
+        return {"status": "error", "pid": pid, "port": _read_port(), "host": _read_proxy_host(),
+                "message": "Proxy ownership is unverified; existing state retained."}
     return {
         "status": "running",
         "pid": pid,

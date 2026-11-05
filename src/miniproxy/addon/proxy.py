@@ -124,50 +124,14 @@ def apply_rewrite_rules(db: "Database", headers: dict, url: str,
 
 
 def host_in_scope(host: str, scope_entries: list[str]) -> bool:
-    """Wildcard-aware host match for scope enforcement.
-
-    An entry matches when it equals the host, ends the host (``*.domain``
-    or bare ``domain`` covering subdomains — bug-bounty scope files use
-    both notations interchangeably), or the entry itself is a ``*.``
-    wildcard. Empty scope lists match everything (guard disabled).
-    """
-    if not scope_entries:
-        return True
-    host = (host or "").lower().strip()
-    if not host:
-        return False
-    # Strip an explicit port for matching purposes.
-    if ":" in host:
-        host = host.split(":", 1)[0]
-    for raw in scope_entries:
-        entry = str(raw or "").lower().strip()
-        if not entry:
-            continue
-        if entry.startswith("*."):
-            entry = entry[2:]
-        if entry.startswith("."):
-            entry = entry[1:]
-        if not entry:
-            continue
-        if host == entry or host.endswith("." + entry):
-            return True
-    return False
+    """Bare domains are exact; only explicit wildcards admit subdomains."""
+    from miniproxy.scope import matches_any_scope
+    return not scope_entries or matches_any_scope(host, scope_entries)
 
 
 def _load_scope() -> tuple[list[str], str]:
-    """Read the scope config injected via environment by proxy_manager."""
-    raw = os.environ.get("MINIPROXY_SCOPE", "")
-    try:
-        entries = json.loads(raw) if raw else []
-        if not isinstance(entries, list):
-            entries = []
-    except ValueError:
-        entries = []
-    entries = [str(e).strip() for e in entries if str(e).strip()]
-    mode = os.environ.get("MINIPROXY_SCOPE_MODE", "skip").strip().lower()
-    if mode not in ("skip", "block"):
-        mode = "skip"
-    return entries, mode
+    from miniproxy.scope import load_scope
+    return load_scope()
 
 
 _BLOCK_BODY = (
@@ -181,6 +145,9 @@ class MiniProxyAddon:
     def __init__(self) -> None:
         self.db = Database()
         self.scope, self.scope_mode = _load_scope()
+        from miniproxy.scope import load_policy
+        self.allowed_scope = load_policy("MINIPROXY_RULES_SCOPE")
+        self.excluded_scope = load_policy("MINIPROXY_EXCLUDE_SCOPE")
         self._skipped = 0
         self._blocked = 0
 
@@ -190,7 +157,9 @@ class MiniProxyAddon:
         # __init__; absent scope = guard disabled = capture everything.)
         scope = getattr(self, "scope", None)
         scope_mode = getattr(self, "scope_mode", "skip")
-        if scope and not host_in_scope(flow.request.pretty_host, scope):
+        from miniproxy.scope import request_in_scope
+        if not request_in_scope(flow.request.pretty_url, scope,
+                                getattr(self, "allowed_scope", None), getattr(self, "excluded_scope", None)):
             if scope_mode == "block":
                 self._blocked = getattr(self, "_blocked", 0) + 1
                 from mitmproxy import http as _mp_http
@@ -229,6 +198,10 @@ class MiniProxyAddon:
             self.db, headers, url, body
         )
         if rewritten:
+            if not request_in_scope(url, scope, getattr(self, "allowed_scope", None), getattr(self, "excluded_scope", None)):
+                from mitmproxy import http as _mp_http
+                flow.response = _mp_http.Response.make(403, _BLOCK_BODY)
+                return
             self._rewrites = getattr(self, "_rewrites", 0) + rewritten
             if headers != dict(req.headers):
                 req.headers = headers

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -45,9 +46,30 @@ def app_client(db_path: str, monkeypatch):
     # makes the next test's start() return 409 and fail for the wrong reason.
     original_job = appmod._intruder_job
     appmod._intruder_job = None
+    # Workers dereference module-global db on every flush. Join every worker
+    # before restoring/replacing that database, including threads that haven't
+    # yet registered their job ID. Otherwise a three-item job can write into the
+    # next test's 25-item job (the observed count of 28).
+    workers = []
+    thread_type = appmod.threading.Thread
+    def tracked_thread(*args, **kwargs):
+        thread = thread_type(*args, **kwargs)
+        if kwargs.get("target") is appmod._run_intruder_job:
+            workers.append(thread)
+        return thread
+    monkeypatch.setattr(appmod.threading, "Thread", tracked_thread)
     try:
         yield appmod.app.test_client(), test_db, appmod
     finally:
+        with appmod._intruder_lock:
+            appmod._intruder_cancelled.update(job["id"] for job in test_db.running_intruder_jobs())
+        deadline = time.monotonic() + 15
+        for worker in workers:
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+        if any(worker.is_alive() for worker in workers):
+            pytest.fail("Intruder worker outlived its isolated database fixture")
+        with appmod._intruder_lock:
+            appmod._intruder_cancelled.clear()
         appmod.db = original_db
         appmod._intruder_job = original_job
 
@@ -56,11 +78,14 @@ def app_client(db_path: str, monkeypatch):
 def _isolate_home(tmp_path: Path, monkeypatch):
     """Keep tests away from real ~/.miniproxy state (pid files etc.)."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Browser defaults are computed during collection, before HOME is patched.
+    # Never use an operator's persistent cookie/profile directory in tests.
+    from miniproxy import browser_client
+    monkeypatch.setattr(browser_client, "DEFAULT_PROFILE", tmp_path / "browser-profile")
     # server.py computes STATE_DIR *and* the pid/port file constants at
     # import time; patch all of them so a developer's leftover mitmdump
     # state can never make tests think a proxy is (or isn't) running.
     from miniproxy import server as servermod
-
     state = tmp_path / ".miniproxy"
     monkeypatch.setattr(servermod, "STATE_DIR", state)
     monkeypatch.setattr(servermod, "PID_FILE", state / "mitmdump.pid")
@@ -73,3 +98,8 @@ def _isolate_home(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(servermod, "DASH_PORT_FILE", state / "dashboard.port")
     monkeypatch.setattr(servermod, "DASH_HOST_FILE", state / "dashboard.host")
     yield
+    with browser_client._BRIDGE_LOCK:
+        bridge = browser_client._BRIDGE
+        browser_client._BRIDGE = None
+    if bridge is not None:
+        bridge.close()

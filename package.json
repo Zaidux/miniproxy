@@ -1,14 +1,14 @@
 {
   "name": "riciplay-miniproxy",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard",
   "main": "index.js",
   "bin": {
     "miniproxy": "./bin/miniproxy"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "prepublishOnly": "echo \"Ensure the Python package riciplay-miniproxy is published to PyPI first\"",
+    "test": "node tests/npm_launcher_test.js",
+    "prepublishOnly": "node scripts/check-publish-ready.js",
     "postinstall": "node scripts/postinstall.js"
   },
   "repository": {
@@ -40,7 +40,7 @@
   ],
   "files": [
     "bin/",
-    "scripts/postinstall.js",
+    "scripts/",
     "README.md",
     "LICENSE"
   ],

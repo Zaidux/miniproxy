@@ -13,14 +13,14 @@ UI (Textual), a web dashboard (Flask), and a shared SQLite capture DB.
 
 ## Getting started
 
-Requires Python 3.10+ and git.
+Requires Python 3.12+ and git; use a fresh virtual environment without upstream mitmproxy.
 
 ```bash
 git clone https://github.com/Zaidux/miniproxy
 cd miniproxy
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"      # runtime deps + pytest, pytest-timeout
-pip install mitmproxy        # provides mitmdump (capture engine)
+# The package installs riciplay-mitmproxy, which provides mitmdump.
 pytest                       # run the test suite
 ```
 
@@ -36,7 +36,7 @@ PYTHONPATH=src python -m miniproxy dashboard    # web UI in the foreground
 
 - **Tests are required** for bug fixes and features. If you fix a bug, add a
   regression test that fails without your fix. The suite must stay green:
-  `pytest` (CI runs it on Linux/macOS × Python 3.10/3.12, plus a
+  `pytest` (CI runs it on Linux/macOS × Python 3.12/3.13, plus a
   `node --check` syntax check on the dashboard's script block).
 - **Keep PRs focused.** One feature or fix per PR; unrelated refactors go in
   their own PR.

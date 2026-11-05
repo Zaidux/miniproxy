@@ -225,7 +225,7 @@ def test_noise_and_scope_compose(tmp_path):
     from miniproxy.addon.db import Database
 
     live = _launch(tmp_path, {
-        "MINIPROXY_SCOPE": "*.allowed.example.test",
+        "MINIPROXY_SCOPE": json.dumps(["*.allowed.example.test"]),
         "MINIPROXY_SCOPE_MODE": "skip",
     })
     try:

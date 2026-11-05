@@ -14,43 +14,32 @@ from miniproxy import server as srv
 @pytest.fixture()
 def state(tmp_path, monkeypatch):
     """Redirect pid/port files at a temp dir and give the module clean state."""
+    # These tests launch fixture scripts, not proxy runtimes. Do not disable
+    # the gate globally: real capture and runtime tests exercise it unchanged.
+    monkeypatch.setattr("miniproxy.runtime.resolve_mitmdump", lambda path: path)
     monkeypatch.setattr(srv, "STATE_DIR", tmp_path)
     monkeypatch.setattr(srv, "PID_FILE", tmp_path / "mitmdump.pid")
     monkeypatch.setattr(srv, "PORT_FILE", tmp_path / "mitmdump.port")
+    monkeypatch.setattr(srv, "HOST_FILE", tmp_path / "mitmdump.host")
     monkeypatch.setattr(srv, "DASH_PID_FILE", tmp_path / "dashboard.pid")
     monkeypatch.setattr(srv, "DASH_PORT_FILE", tmp_path / "dashboard.port")
+    monkeypatch.setattr(srv, "DASH_HOST_FILE", tmp_path / "dashboard.host")
     return tmp_path
 
 
 class TestPidGuard:
-    def test_pid_matches_checks_cmdline(self):
-        import time
-
-        proc = subprocess.Popen(["sleep", "2"])
-        try:
-            time.sleep(0.2)  # let the child exec (Popen returns pre-exec)
-            assert srv._pid_matches(proc.pid, "sleep")
-            assert not srv._pid_matches(proc.pid, "definitely-not-this-command")
-        finally:
-            proc.kill()
-            proc.wait()
-
-    def test_missing_proc_entry_assumes_match(self):
-        # No /proc on the platform (or raced exit): keep permissive behavior.
-        assert srv._pid_matches(10**9, "mitmdump") in (True, False)
-
     def test_status_cleans_stale_pid(self, state, monkeypatch):
         # A pid file pointing at *this* python process (not mitmdump).
         srv.PID_FILE.write_text(str(os.getpid()))
         st = srv.status()
-        assert st["status"] == "not_running"
-        assert not srv.PID_FILE.exists(), "stale pid file must be removed"
+        assert st["status"] == "error"
+        assert srv.PID_FILE.exists(), "unverified live ownership state must be retained"
 
     def test_stop_cleans_recycled_pid(self, state, monkeypatch):
         srv.PID_FILE.write_text(str(os.getpid()))
         result = srv.stop()
-        assert result["status"] == "not_running"
-        assert "stale" in result["message"]
+        assert result["status"] == "error"
+        assert "ownership" in result["message"]
 
 
 class TestStartValidation:
@@ -176,6 +165,7 @@ class TestDashboardLifecycle:
             time.sleep(0.2)
             srv.DASH_HOST_FILE.parent.mkdir(parents=True, exist_ok=True)
             srv.DASH_PID_FILE.write_text(str(proc.pid))
+            srv._write_process_identity(srv.DASH_PID_FILE, proc.pid)
             srv.DASH_PORT_FILE.write_text("5599")
             srv.DASH_HOST_FILE.write_text("0.0.0.0")
             r = srv._ensure_dashboard(None, 5599, dash_host="127.0.0.1")

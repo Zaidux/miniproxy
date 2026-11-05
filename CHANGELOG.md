@@ -12,6 +12,20 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.9.7] — release candidate
+
+- Requires Python 3.12+ and replaces upstream mitmproxy with the independently
+  named `riciplay-mitmproxy==12.3.1.1` compatibility distribution and Tornado 6.6
+  security floor. No overlapping upstream/fork distributions are allowed.
+- Adds local runtime metadata checks, active-environment proxy executable
+  selection, exact-version npm installation/dispatch and a PyPI-first npm gate.
+- Documents fresh-environment migration that preserves capture databases, CA
+  material and credentials; no automated shared-package uninstall is performed.
+- Updates Linux/macOS CI to Python 3.12/3.13 and adds npm launcher regressions.
+
+Publication remains held until the fork and complete dependency chain pass
+release validation and are publicly available.
+
 ## [0.9.6] — 2026-10-21
 
 ### Added

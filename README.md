@@ -8,6 +8,9 @@ Ships the **v4 capture engine** (the same addon the Riciplay CLI embeds):
 - **Static-asset streaming** — JS/CSS/images stream through without buffering, so heavy SPAs don't pay a per-flow decode tax.
 - **Timing** — `ttfb_ms` / `total_ms` on every flow. Oracles and timing side-channels need numbers.
 - **Scope guard** — `--scope '*.target.com'` keeps out-of-scope traffic out of your capture DB (or 403-blocks it with `--block-out-of-scope`).
+  Bare domains match exactly; only explicit wildcards admit subdomains. URL
+  entries retain scheme, port, and path constraints in capture and manual
+  interception. Invalid scope configuration fails closed.
 - **Repeater** — pick a logged request, edit method/headers/body, resend, inspect.
 - **Intruder** — mark parameters with `§param§` placeholders, supply a wordlist, fuzz every position; results highlighted by status code and stored in the DB.
 - **TUI** — a full terminal UI (`miniproxy tui`, built with [Textual](https://textual.textualize.io)): live capture feed, master–detail inspection, filters, Repeater, Intruder results, and proxy control — no browser needed.
@@ -23,7 +26,10 @@ pip install riciplay-miniproxy
 npm install -g riciplay-miniproxy
 ```
 
-Requires Python 3.10+ and [mitmproxy](https://mitmproxy.org/).
+Requires Python 3.12+. Installs `riciplay-mitmproxy==12.3.1.1`, a temporary
+maintained distribution of upstream mitmproxy 12.3.1 with Tornado 6.6 support.
+Do **not** also install upstream `mitmproxy`: both own the same imports/scripts.
+See [Setup](docs/setup.md) for fresh-environment migration and the fork retirement policy.
 
 ## Quick start
 
@@ -256,7 +262,7 @@ pytest                     # 400+ tests: db, devices, API, exports, intruder,
                           # body search, pitchfork, selection safety, tabs
 ```
 
-CI runs the suite on Linux/macOS (Python 3.10/3.12) for every push and PR,
+CI runs the suite on Linux/macOS (Python 3.12/3.13) for every push and PR,
 plus a JS syntax check on the dashboard. The web dashboard binds `127.0.0.1`
 by default; LAN exposure is opt-in via `--dashboard-host 0.0.0.0` (pair it
 with `--dashboard-token` for auth on state-changing endpoints) — see

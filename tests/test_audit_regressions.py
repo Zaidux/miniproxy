@@ -218,10 +218,11 @@ def test_with_dashboard_false_suppresses_the_dashboard(monkeypatch):
     spawned a second dashboard."""
     from miniproxy import server
 
+    monkeypatch.setattr("miniproxy.runtime.resolve_mitmdump", lambda path: path)
     calls = []
     monkeypatch.setattr(server, "_read_pid", lambda: 1234)
     monkeypatch.setattr(server, "_process_exists", lambda pid: True)
-    monkeypatch.setattr(server, "_pid_matches", lambda pid, needle: True)
+    monkeypatch.setattr(server, "_owned_process", lambda path, pid: True)
     monkeypatch.setattr(server, "_read_port", lambda: 8080)
     monkeypatch.setattr(server, "_ensure_dashboard",
                         lambda *a, **k: calls.append(a) or {"url": "http://x"})
