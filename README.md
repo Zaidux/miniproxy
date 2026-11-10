@@ -89,6 +89,22 @@ miniproxy stop
 
 State (pid, port, default capture DB) lives under `~/.miniproxy/`.
 
+### Machine-readable investigations
+
+Version 0.9.8 adds JSON status/start/stop, local readiness, addon provenance,
+and SQL-filtered cursor exports without a dashboard:
+
+```bash
+miniproxy health --json
+miniproxy addon-manifest --json
+miniproxy log --db ./capture.db --host target.example --json
+miniproxy export --db ./capture.db --format jsonl --limit 100
+```
+
+See [Automation contracts](docs/automation.md) for schema, continuation,
+privacy and readiness boundaries. A ready listener is not proof that upstream
+forwarding or a particular browser's capture succeeded.
+
 ### Quieting browser noise
 
 ```bash

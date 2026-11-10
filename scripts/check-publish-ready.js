@@ -8,9 +8,13 @@ async function main() {
   const res = await fetch(`https://pypi.org/pypi/riciplay-miniproxy/${target}/json`);
   if (!res.ok) throw new Error(`Matching PyPI version ${target} is not publicly available`);
   const data = await res.json();
-  if (data.info.version !== target || !data.urls.some(u => !u.yanked)) throw new Error('PyPI release is unavailable/yanked');
+  if (data.info.version !== target || !data.urls.some(u => !u.yanked && u.packagetype === 'bdist_wheel') ||
+      !data.urls.some(u => !u.yanked && u.packagetype === 'sdist')) throw new Error('Complete PyPI release is unavailable/yanked');
   if (!(data.info.requires_dist || []).some(r => /^riciplay-mitmproxy\s*==\s*12\.3\.1\.1$/.test(r))) {
     throw new Error('Public Python metadata does not use the validated fork');
+  }
+  if ((data.info.requires_dist || []).some(r => /^mitmproxy(?:\s|[<>=;]|$)/i.test(r))) {
+    throw new Error('Public Python metadata also depends on upstream mitmproxy');
   }
 }
 

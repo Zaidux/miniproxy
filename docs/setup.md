@@ -67,7 +67,7 @@ maintenance boundary and retirement plan are documented in
 [RICIPLAY_FORK.md](https://github.com/Zaidux/mitmproxy/blob/releases/riciplay-12.3.1.1/RICIPLAY_FORK.md).
 
 ```bash
-python -m pip install riciplay-miniproxy==0.9.7  # includes the capture engine
+python -m pip install riciplay-miniproxy==0.9.8  # includes the capture engine
 mitmdump --version
 ```
 
@@ -90,11 +90,11 @@ For an existing upstream environment, stop running proxy processes explicitly,
 then create a new environment without modifying captures, CA files or credentials:
 
 ```bash
-python3.12 -m venv ~/.venvs/miniproxy-0.9.7
-~/.venvs/miniproxy-0.9.7/bin/python -m pip install riciplay-miniproxy==0.9.7
-~/.venvs/miniproxy-0.9.7/bin/python -m pip check
-~/.venvs/miniproxy-0.9.7/bin/miniproxy version
-export MINIPROXY_PYTHON="$HOME/.venvs/miniproxy-0.9.7/bin/python" # npm launcher
+python3.12 -m venv ~/.venvs/miniproxy-0.9.8
+~/.venvs/miniproxy-0.9.8/bin/python -m pip install riciplay-miniproxy==0.9.8
+~/.venvs/miniproxy-0.9.8/bin/python -m pip check
+~/.venvs/miniproxy-0.9.8/bin/miniproxy version
+export MINIPROXY_PYTHON="$HOME/.venvs/miniproxy-0.9.8/bin/python" # npm launcher
 ```
 
 Keep the old environment until the new one passes capture/readback validation.

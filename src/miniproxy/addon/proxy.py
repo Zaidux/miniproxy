@@ -19,32 +19,54 @@ Bundle v4 additions:
   misconfigured browser cannot leak out-of-scope browsing into the session.
 """
 
-import json
-import os
 import re
 import time
 
 from mitmproxy.http import HTTPFlow
 
 try:
-    from miniproxy.addon.db import Database  # packaged import
+    from miniproxy.addon.db import (  # packaged import
+        Database,
+        capture_headers,
+        is_captured_content_type,
+        persist_http_request,
+        persist_http_response,
+        _CAPTURED_CONTENT_TYPES,
+    )
 except ImportError:  # pragma: no cover - mitmdump path-based load
-    from db import Database
+    from db import (  # type: ignore
+        Database,
+        capture_headers,
+        is_captured_content_type,
+        persist_http_request,
+        persist_http_response,
+        _CAPTURED_CONTENT_TYPES,
+    )
 
-_API_CONTENT_TYPES: set[str] = {
-    "application/json",
-    "text/html",
-    "text/xml",
-    "application/xml",
-    "text/plain",
-    "application/x-www-form-urlencoded",
-    "multipart/form-data",
-}
+
+# Historical downstream import retained; canonical classification also accepts
+# structured +json/+xml suffixes and remains owned by db.py.
+_API_CONTENT_TYPES = set(_CAPTURED_CONTENT_TYPES)
 
 
 def _is_api_content(content_type: str) -> bool:
-    ct = (content_type or "").lower().split(";")[0].strip()
-    return ct in _API_CONTENT_TYPES
+    """Whether this response is buffered under the canonical body policy."""
+    return is_captured_content_type(content_type)
+
+
+def _apply_changed_headers(request, before: dict, after: dict) -> None:
+    """Apply only rule-modified fields, preserving URL-derived authority.
+
+    Assigning the complete pre-URL header dictionary after ``request.url``
+    would restore a stale Host field.  Conversely assigning the URL after a
+    Host-only rewrite silently reset that rewrite.  Deltas make both kinds of
+    rule explicit: URL rules update routing first; an explicit Host rule then
+    updates the HTTP authority that is actually sent.
+    """
+    before_ci = {str(k).lower(): str(v) for k, v in before.items()}
+    for name, value in after.items():
+        if before_ci.get(str(name).lower()) != str(value):
+            request.headers[str(name)] = str(value)
 
 
 def apply_rewrite_rules(db: "Database", headers: dict, url: str,
@@ -158,8 +180,16 @@ class MiniProxyAddon:
         scope = getattr(self, "scope", None)
         scope_mode = getattr(self, "scope_mode", "skip")
         from miniproxy.scope import request_in_scope
-        if not request_in_scope(flow.request.pretty_url, scope,
-                                getattr(self, "allowed_scope", None), getattr(self, "excluded_scope", None)):
+        allowed_scope = getattr(self, "allowed_scope", None)
+        excluded_scope = getattr(self, "excluded_scope", None)
+        # Before any rewrite, mitmproxy's pretty_url is the HTTP effective
+        # authority (Host for HTTP/1.1). The connection route may deliberately
+        # differ for virtual-host testing or a local resolver. Rewritten flows
+        # are checked more strictly below because a rule can change either
+        # authority independently.
+        if not request_in_scope(
+            flow.request.pretty_url, scope, allowed_scope, excluded_scope
+        ):
             if scope_mode == "block":
                 self._blocked = getattr(self, "_blocked", 0) + 1
                 from mitmproxy import http as _mp_http
@@ -187,9 +217,15 @@ class MiniProxyAddon:
         # on a per-DB "intercept" config flag that defaults to absent/False on
         # every fresh session DB — which silently produced proxies that routed
         # traffic but captured nothing (empty flows).
-        headers = dict(req.headers)
-        body = req.text or ""
+        headers, _ = capture_headers(req.headers)
+        original_headers = dict(headers)
+        try:
+            body = req.text or ""
+        except (ValueError, UnicodeError):
+            body = ""
+        original_body = body
         url = req.pretty_url
+        original_url = url
 
         # Match & replace, applied before the request goes upstream. The
         # rewritten request is what leaves the proxy — this is interception,
@@ -198,32 +234,52 @@ class MiniProxyAddon:
             self.db, headers, url, body
         )
         if rewritten:
-            if not request_in_scope(url, scope, getattr(self, "allowed_scope", None), getattr(self, "excluded_scope", None)):
-                from mitmproxy import http as _mp_http
-                flow.response = _mp_http.Response.make(403, _BLOCK_BODY)
-                return
-            self._rewrites = getattr(self, "_rewrites", 0) + rewritten
-            if headers != dict(req.headers):
-                req.headers = headers
-            if body != (req.text or ""):
+            # URL routing changes are applied before explicit header changes.
+            # In particular, an explicit Host rewrite must be last or setting
+            # request.url will silently replace it with the URL authority.
+            if url != original_url:
+                req.url = url
+            _apply_changed_headers(req, original_headers, headers)
+            if body != original_body:
                 try:
                     req.text = body
                 except (ValueError, UnicodeError):
                     # Binary bodies cannot round-trip through .text; leaving
                     # the original content is better than breaking the request.
-                    body = req.text or ""
-            if url != req.pretty_url:
-                # pretty_url is derived; set it so downstream capture and the
-                # upstream request agree.
-                req.url = url
-                flow.request = req
+                    body = original_body
 
-        req_id = self.db.store_request(
-            method=req.method,
-            url=url,
-            headers=headers,
-            body=body,
-        )
+            # Validate both the actual connection target and the final HTTP
+            # authority/Host view.  A Host-only rewrite does not change
+            # request.url in mitmproxy, while a URL rewrite does; checking only
+            # either representation leaves the other unvalidated.
+            final_route = req.url
+            final_effective_url = req.pretty_url
+            # A pre-existing route/effective-host difference is legitimate
+            # for local virtual-host fixtures and custom resolution. Recheck
+            # the connection route only when a URL rule changed it; always
+            # recheck pretty_url because that reflects an explicit Host rule.
+            route_in_scope = (
+                url == original_url
+                or request_in_scope(
+                    final_route, scope, getattr(self, "allowed_scope", None),
+                    getattr(self, "excluded_scope", None),
+                )
+            )
+            in_scope = route_in_scope and request_in_scope(
+                final_effective_url, scope,
+                getattr(self, "allowed_scope", None),
+                getattr(self, "excluded_scope", None),
+            )
+            if not in_scope:
+                from mitmproxy import http as _mp_http
+                flow.response = _mp_http.Response.make(403, _BLOCK_BODY)
+                return
+            self._rewrites = getattr(self, "_rewrites", 0) + rewritten
+            flow.request = req
+
+        # Capture the final request object, not the helper's intermediate
+        # dictionary. This is exactly what mitmproxy will forward.
+        req_id = persist_http_request(self.db, req)
         flow._miniproxy_id = req_id
         flow._miniproxy_t0 = time.monotonic()
 
@@ -252,29 +308,11 @@ class MiniProxyAddon:
 
         resp = flow.response
         try:
-            code = resp.status_code
-            headers = dict(resp.headers)
-            ct = resp.headers.get("content-type", "")
-
-            if _is_api_content(ct):
-                self.db.update_response(
-                    req_id=req_id,
-                    code=code,
-                    headers=headers,
-                    body=resp.text or "",
-                    content_type=ct,
-                    ttfb_ms=ttfb,
-                    total_ms=total,
-                )
-            else:
-                self.db.update_response_light(
-                    req_id=req_id,
-                    code=code,
-                    headers=headers,
-                    content_type=ct,
-                    ttfb_ms=ttfb,
-                    total_ms=total,
-                )
+            if resp is None:
+                raise ValueError("response_missing")
+            persist_http_response(
+                self.db, req_id, resp, ttfb_ms=ttfb, total_ms=total,
+            )
         except Exception:
             # One unreadable response (binary decode, streaming edge case)
             # must not leave the row permanently response-less.

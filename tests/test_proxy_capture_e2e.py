@@ -19,10 +19,17 @@ import subprocess
 import sys
 import time
 import urllib.request
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-mitmdump = pytest.importorskip("mitmproxy") and __import__("shutil").which("mitmdump")
+pytest.importorskip("mitmproxy")
+from miniproxy.runtime import resolve_mitmdump
+try:
+    mitmdump = resolve_mitmdump()
+except RuntimeError:
+    mitmdump = None
 pytestmark = pytest.mark.skipif(not mitmdump, reason="mitmdump not installed")
 
 
@@ -70,7 +77,7 @@ def _launch(tmp_path, extra_env: dict[str, str] | None = None):
     )
     proc = subprocess.Popen(
         [mitmdump, "-s", addon, "--listen-host", "127.0.0.1",
-         "--listen-port", str(port), "--set", "block_global=false"],
+         "--listen-port", str(port), "--set", "block_global=false", "--set", f"confdir={tmp_path / 'ca'}"],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     deadline = time.time() + 25
@@ -104,7 +111,31 @@ def live_proxy(tmp_path):
     _shutdown(live)
 
 
-def _fetch(port: int, url: str) -> None:
+@pytest.fixture()
+def local_target():
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_GET(self):
+            body = b'{"fixture":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/problem+json")
+            self.send_header("Set-Cookie", "a=1; Expires=Wed, 09 Jun 2027 10:18:14 GMT")
+            self.send_header("Set-Cookie", "b=2")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield httpd.server_port
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def _fetch(port: int, url: str, target_port: int) -> None:
     """Plain-HTTP request *through the proxy* (no CA needed).
 
     The proxy is passed explicitly rather than relying on ``http_proxy``: a
@@ -112,23 +143,27 @@ def _fetch(port: int, url: str) -> None:
     silently send the request somewhere else — which reads as "the addon
     captured nothing" rather than "the test never used the proxy".
     """
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{port}"})
-    )
-    try:
-        opener.open(urllib.request.Request(url), timeout=20)
-    except Exception:
-        pass  # status/SSL is irrelevant; we only care what was captured
+    # Preserve virtual Host for scope/noise checks while routing only to an
+    # operator-owned loopback fixture. No public DNS/third-party dependency.
+    from urllib.parse import urlsplit
+    parsed = urlsplit(url)
+    target = f"http://127.0.0.1:{target_port}{parsed.path or '/'}"
+    request = f"GET {target} HTTP/1.1\r\nHost: {parsed.netloc}\r\nConnection: close\r\n\r\n".encode()
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as connection:
+        connection.settimeout(10)
+        connection.sendall(request)
+        while connection.recv(65536):
+            pass
 
 
-def test_live_traffic_is_captured(live_proxy):
+def test_live_traffic_is_captured(live_proxy, local_target):
     """A proxied request MUST appear in the capture DB.
 
     Regression test for a silently-swallowed `UnboundLocalError` in the noise
     gate, which made the proxy route traffic while capturing nothing at all.
     """
     before = len(_rows(live_proxy["db"]))
-    _fetch(live_proxy["port"], "http://example.com/")
+    _fetch(live_proxy["port"], "http://fixture.example.test/", local_target)
     deadline = time.time() + 15
     while time.time() < deadline and len(_rows(live_proxy["db"])) == before:
         time.sleep(0.4)
@@ -137,12 +172,18 @@ def test_live_traffic_is_captured(live_proxy):
         "no capture written — the addon is likely throwing and mitmdump is "
         "swallowing it"
     )
-    assert any("example.com" in url for _, url in rows)
+    assert any("fixture.example.test" in url for _, url in rows)
+    from miniproxy.addon.db import Database
+    captured = Database(live_proxy["db"]).get_logs(limit=10)
+    fixture = next(row for row in captured if "fixture.example.test" in row["url"])
+    assert json.loads(fixture["response_body"]) == {"fixture": True}
+    raw_headers = json.loads(fixture["response_headers_raw"])
+    assert len([field for field in raw_headers if field[0].lower() == "set-cookie"]) == 2
 
 
-def test_addon_raises_nothing(live_proxy):
+def test_addon_raises_nothing(live_proxy, local_target):
     """The addon's stderr must not contain an 'Addon error' traceback."""
-    _fetch(live_proxy["port"], "http://example.com/")
+    _fetch(live_proxy["port"], "http://fixture.example.test/", local_target)
     time.sleep(3)
     live_proxy["proc"].terminate()
     out = live_proxy["proc"].stdout.read()
@@ -151,7 +192,7 @@ def test_addon_raises_nothing(live_proxy):
     assert "Traceback" not in out, f"traceback in addon:\n{out}"
 
 
-def test_noise_rule_blocks_capture_but_still_proxies(live_proxy):
+def test_noise_rule_blocks_capture_but_still_proxies(live_proxy, local_target):
     """An enabled noise rule must keep the flow out of the DB.
 
     The traffic still has to be proxied — the gate stops the capture, not the
@@ -163,8 +204,8 @@ def test_noise_rule_blocks_capture_but_still_proxies(live_proxy):
     db.add_noise_rule("noisy.example.test", enabled=True)
 
     before = len(_rows(live_proxy["db"]))
-    _fetch(live_proxy["port"], "http://noisy.example.test/x")
-    _fetch(live_proxy["port"], "http://clean.example.test/x")
+    _fetch(live_proxy["port"], "http://noisy.example.test/x", local_target)
+    _fetch(live_proxy["port"], "http://clean.example.test/x", local_target)
     deadline = time.time() + 15
     while time.time() < deadline and len(_rows(live_proxy["db"])) == before:
         time.sleep(0.4)
@@ -176,7 +217,7 @@ def test_noise_rule_blocks_capture_but_still_proxies(live_proxy):
         "the clean control request was not captured"
 
 
-def test_disabled_rule_does_not_block(live_proxy):
+def test_disabled_rule_does_not_block(live_proxy, local_target):
     """Rules ship disabled — an unenabled rule must capture normally."""
     from miniproxy.addon.db import Database
 
@@ -184,7 +225,7 @@ def test_disabled_rule_does_not_block(live_proxy):
     db.add_noise_rule("optin.example.test", enabled=False)
 
     before = len(_rows(live_proxy["db"]))
-    _fetch(live_proxy["port"], "http://optin.example.test/x")
+    _fetch(live_proxy["port"], "http://optin.example.test/x", local_target)
     deadline = time.time() + 15
     while time.time() < deadline and len(_rows(live_proxy["db"])) == before:
         time.sleep(0.4)
@@ -193,7 +234,7 @@ def test_disabled_rule_does_not_block(live_proxy):
         "a disabled noise rule blocked the capture"
 
 
-def test_scope_guard_still_blocks_before_noise(tmp_path):
+def test_scope_guard_still_blocks_before_noise(tmp_path, local_target):
     """With a scope set, out-of-scope hosts are skipped, noise rules or not.
 
     Scope is read once at addon construction, so this needs its own proxy
@@ -205,8 +246,8 @@ def test_scope_guard_still_blocks_before_noise(tmp_path):
         "MINIPROXY_SCOPE_MODE": "skip",
     })
     try:
-        _fetch(live["port"], "http://denied.example.test/x")
-        _fetch(live["port"], "http://ok.allowed.example.test/x")
+        _fetch(live["port"], "http://denied.example.test/x", local_target)
+        _fetch(live["port"], "http://ok.allowed.example.test/x", local_target)
         deadline = time.time() + 15
         while time.time() < deadline and not _rows(live["db"]):
             time.sleep(0.4)
@@ -220,7 +261,7 @@ def test_scope_guard_still_blocks_before_noise(tmp_path):
         _shutdown(live)
 
 
-def test_noise_and_scope_compose(tmp_path):
+def test_noise_and_scope_compose(tmp_path, local_target):
     """An in-scope host matched by a noise rule is still skipped."""
     from miniproxy.addon.db import Database
 
@@ -230,8 +271,8 @@ def test_noise_and_scope_compose(tmp_path):
     })
     try:
         Database(live["db"]).add_noise_rule("noisy.allowed.example.test", enabled=True)
-        _fetch(live["port"], "http://noisy.allowed.example.test/x")
-        _fetch(live["port"], "http://clean.allowed.example.test/x")
+        _fetch(live["port"], "http://noisy.allowed.example.test/x", local_target)
+        _fetch(live["port"], "http://clean.allowed.example.test/x", local_target)
         deadline = time.time() + 15
         while time.time() < deadline and not _rows(live["db"]):
             time.sleep(0.4)

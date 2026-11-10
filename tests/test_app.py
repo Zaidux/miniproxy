@@ -391,3 +391,20 @@ class TestRepeater:
                         json={"method": "GET", "url": "http://127.0.0.1:1/x",
                               "headers": {}, "body": ""})
         assert r.status_code == 500 and "error" in r.get_json()
+
+    @pytest.mark.parametrize("payload,fragment", [
+        ({"method": 3, "url": "https://example.test"}, "method"),
+        ({"method": "GET", "url": 3}, "url"),
+        ({"method": "GET", "url": "ftp://example.test"}, "URL"),
+        ({"method": "GET", "url": "https://example.test", "headers": []},
+         "headers"),
+        ({"method": "GET", "url": "https://example.test", "body": {}},
+         "body"),
+    ])
+    def test_malformed_repeater_payloads_return_json_400(
+        self, app_client, payload, fragment,
+    ):
+        client, _, _ = app_client
+        response = client.post("/api/repeater/send", json=payload)
+        assert response.status_code == 400
+        assert fragment.lower() in response.get_json()["error"].lower()

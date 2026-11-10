@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -37,7 +38,7 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 CHROME = shutil.which("google-chrome") or shutil.which("chromium")
 pytestmark = pytest.mark.skipif(not CHROME, reason="chrome not installed")
 
-SRC = "/root/projects/miniproxy/src"
+SRC = str(Path(__file__).resolve().parents[1] / "src")
 DASH_PORT = 5321
 TARGET_PORT = 5322
 

@@ -1,8 +1,7 @@
 {
   "name": "riciplay-miniproxy",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard",
-  "main": "index.js",
   "bin": {
     "miniproxy": "./bin/miniproxy"
   },
@@ -32,7 +31,7 @@
   },
   "homepage": "https://github.com/Zaidux/miniproxy#readme",
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "os": [
     "darwin",
@@ -41,6 +40,7 @@
   "files": [
     "bin/",
     "scripts/",
+    "tests/npm_launcher_test.js",
     "README.md",
     "LICENSE"
   ],

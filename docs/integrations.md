@@ -114,11 +114,16 @@ docker run --rm \
 ## CI / headless capture
 
 ```bash
-miniproxy start --no-dashboard &
-export https_proxy=http://127.0.0.1:8080 REQUESTS_CA_BUNDLE=~/.miniproxy/mitmproxy-ca-cert.pem
+set -e
+miniproxy start --no-dashboard --port auto --json > proxy-start.json
+trap 'miniproxy stop --json >&2' EXIT
+miniproxy health --json > proxy-health.json  # requires listener + capture DB readiness
+port=$(python3 -c 'import json; print(json.load(open("proxy-start.json"))["port"])')
+ca=$(python3 -c 'import json; print(json.load(open("proxy-health.json"))["ca_certificate_path"])')
+export http_proxy="http://127.0.0.1:$port" https_proxy="http://127.0.0.1:$port"
+export REQUESTS_CA_BUNDLE="$ca"
 pytest ./my-e2e-tests
-miniproxy log --limit 200 > capture.txt
-miniproxy stop
+miniproxy export --limit 200 --format json > capture.json
 ```
 
 The `log`/`send`/`tui` commands are DB readers — they work on any machine
@@ -130,3 +135,8 @@ MINIPROXY_DB_PATH=./lab.db miniproxy tui   # inspect locally
 ```
 
 (Or set `MINIPROXY_DB_PATH` in your shell profile / CI secrets.)
+
+Use an isolated `MINIPROXY_STATE_DIR` for concurrent CI jobs. `health` only
+checks local readiness; it does not contact a third-party target or claim upstream
+forwarding works. Raw exports include sensitive headers/bodies. Protect the output
+files and use `next_cursor` with `--before-id` to continue a bounded export.

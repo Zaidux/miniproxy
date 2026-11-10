@@ -15,6 +15,7 @@ on the database, which is the source of truth for a durable job.
 from __future__ import annotations
 
 import time
+import sqlite3
 
 import pytest
 
@@ -77,6 +78,66 @@ def test_results_are_persisted_with_the_job(marker_capture, monkeypatch):
     assert job["progress"] == 25
     # Every row is tagged with the job that produced it.
     assert len(db.intruder_job_results(job_id)) == 25
+
+
+def test_failed_chunk_commit_never_advances_durable_progress(
+    marker_capture, monkeypatch,
+):
+    """A failed result write cannot report done or skip the failed chunk."""
+    client, db, appmod, cap = marker_capture
+    items = [{"word": "a", "payloads": None, "label": "a"}]
+    job_id = db.create_intruder_job(
+        request_id=cap,
+        mode="single",
+        base={"method": "GET", "url": "https://t/l?u=§user§",
+              "headers": {}, "body": ""},
+        items=items,
+    )
+    monkeypatch.setattr(appmod.intruder, "run_items", lambda *_: [{
+        "request_id": cap, "payload": "a", "method": "GET",
+        "url": "https://t/l?u=a", "headers": {}, "body": "",
+        "response_code": 200, "response_body": "ok",
+        "response_headers": {},
+    }])
+    calls = {"n": 0}
+
+    def fail(**_kwargs):
+        calls["n"] += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "commit_intruder_chunk", fail)
+    monkeypatch.setattr(appmod, "INTRUDER_COMMIT_BACKOFF", 0)
+
+    appmod._run_intruder_job(job_id)
+
+    job = db.get_intruder_job(job_id)
+    assert calls["n"] == appmod.INTRUDER_COMMIT_RETRIES
+    assert job["status"] == "error"
+    assert job["progress"] == 0
+    assert db.intruder_job_results(job_id) == []
+
+
+def test_intruder_results_and_progress_rollback_together(marker_capture):
+    _, db, _, cap = marker_capture
+    job_id = db.create_intruder_job(
+        request_id=cap, mode="single", base={},
+        items=[{"word": "a"}],
+    )
+    result = {
+        "request_id": cap, "payload": "a", "method": "GET",
+        "url": "https://t/", "headers": {}, "body": "",
+        "response_code": 200, "response_body": "ok",
+        "response_headers": {},
+    }
+
+    with pytest.raises(ValueError):
+        db.commit_intruder_chunk(
+            job_id=job_id, expected_progress=0, progress=2,
+            results=[result], complete=True,
+        )
+
+    assert db.get_intruder_job(job_id)["progress"] == 0
+    assert db.intruder_job_results(job_id) == []
 
 
 def test_progress_is_visible_while_running(marker_capture, monkeypatch):

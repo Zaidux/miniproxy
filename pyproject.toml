@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "riciplay-miniproxy"
-version = "0.9.7"
+version = "0.9.8"
 description = "A lightweight HTTP/S interception proxy for security research — always-on capture, timing, scope guard, Repeater + Intruder dashboard"
 readme = "README.md"
 license = "MIT"
@@ -60,8 +60,10 @@ Security = "https://github.com/Zaidux/miniproxy/blob/main/SECURITY.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/miniproxy"]
+exclude = ["**/intercept_queue.json", "**/intercept_decisions.json", "**/__pycache__/**", "**/*.db", "**/*.db-wal", "**/*.db-shm"]
 
 [tool.hatch.build.targets.sdist]
+exclude = ["**/intercept_queue.json", "**/intercept_decisions.json", "**/__pycache__/**", "**/*.db", "**/*.db-wal", "**/*.db-shm"]
 include = [
     "src/miniproxy",
     "README.md",
@@ -80,3 +82,4 @@ include = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --timeout=60"
+asyncio_default_fixture_loop_scope = "function"

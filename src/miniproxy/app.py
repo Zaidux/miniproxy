@@ -161,6 +161,12 @@ def _request_has_marker(base: dict[str, Any]) -> bool:
 # crash loses little; large enough not to commit per request.
 INTRUDER_FLUSH_EVERY = 10
 
+# SQLite's connection timeout already handles brief lock contention.  These
+# extra bounded retries cover a lock being released just after that timeout
+# without allowing a worker to spin forever or falsely advance progress.
+INTRUDER_COMMIT_RETRIES = 3
+INTRUDER_COMMIT_BACKOFF = 0.1
+
 # Job ids with a live thread, so a resume never double-runs one.
 _intruder_threads: set[int] = set()
 _intruder_cancelled: set[int] = set()
@@ -211,16 +217,28 @@ def _run_intruder_job(job_id: int) -> None:
                 return
             chunk = items[done:done + INTRUDER_FLUSH_EVERY]
             results = intruder.run_items(base, chunk, req_id)
-            try:
-                db.store_intruder_results(results, job_id=job_id)
-            except Exception:
-                pass  # keep going; the rows are still shown from memory? no —
-                # persistence is the source of truth here, so log nothing and
-                # continue. A failed flush leaves progress behind, which makes
-                # the job retry that chunk on resume.
-            done += len(chunk)
-            db.update_intruder_job(job_id, progress=done)
-        db.update_intruder_job(job_id, status="done", progress=len(items))
+            next_progress = done + len(chunk)
+            for attempt in range(INTRUDER_COMMIT_RETRIES):
+                try:
+                    db.commit_intruder_chunk(
+                        job_id=job_id,
+                        expected_progress=done,
+                        progress=next_progress,
+                        results=results,
+                        complete=next_progress == len(items),
+                    )
+                    break
+                except sqlite3.OperationalError:
+                    if attempt + 1 >= INTRUDER_COMMIT_RETRIES:
+                        raise
+                    import time
+
+                    time.sleep(INTRUDER_COMMIT_BACKOFF * (attempt + 1))
+            done = next_progress
+        # Empty jobs are not normally created, but retaining a correct direct
+        # runner contract costs little and avoids a permanent running row.
+        if not items:
+            db.update_intruder_job(job_id, status="done", progress=0)
     except Exception as exc:
         db.update_intruder_job(job_id, status="error", error=str(exc))
     finally:
@@ -957,19 +975,37 @@ def meta():
 
 @app.route("/api/repeater/send", methods=["POST"])
 def repeater_send():
-    data = flask_request.get_json(silent=True) or {}
-    if not data:
+    data = flask_request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
         return jsonify({"error": "empty request body"}), 400
 
-    method = data.get("method", "GET").upper()
-    url = data.get("url", "").strip()
+    raw_method = data.get("method", "GET")
+    raw_url = data.get("url", "")
+    if not isinstance(raw_method, str):
+        return jsonify({"error": "method must be a string"}), 400
+    if not isinstance(raw_url, str):
+        return jsonify({"error": "url must be a string"}), 400
+    method = raw_method.strip().upper()
+    url = raw_url.strip()
+    if not method or not re.fullmatch(r"[A-Z][A-Z0-9!#$%&'*+.^_`|~-]{0,31}", method):
+        return jsonify({"error": "method is invalid"}), 400
     raw_headers = data.get("headers", {})
     if isinstance(raw_headers, str):
         try:
             raw_headers = json.loads(raw_headers)
         except json.JSONDecodeError:
-            raw_headers = {}
+            return jsonify({"error": "headers must be a JSON object"}), 400
+    if not isinstance(raw_headers, dict):
+        return jsonify({"error": "headers must be an object"}), 400
+    if not all(isinstance(k, str) and isinstance(v, (str, int, float, bool))
+               for k, v in raw_headers.items()):
+        return jsonify({"error": "header names and values must be scalar"}), 400
+    raw_headers = {str(k): str(v) for k, v in raw_headers.items()}
     body = data.get("body", "")
+    if body is None:
+        body = ""
+    if not isinstance(body, str):
+        return jsonify({"error": "body must be a string"}), 400
     # A textarea strips CRLF, which breaks multipart framing; the API is a
     # supported path too, so normalise here rather than trusting the client.
     if isinstance(raw_headers, dict):
@@ -995,6 +1031,15 @@ def repeater_send():
 
     if not url:
         return jsonify({"error": "URL is required"}), 400
+    try:
+        parsed_url = urlsplit(url)
+        if parsed_url.scheme not in ("http", "https") or not parsed_url.hostname:
+            raise ValueError
+        # Accessing .port performs range/syntax validation.
+        if parsed_url.port == 0:
+            raise ValueError
+    except ValueError:
+        return jsonify({"error": "URL must be an absolute http(s) URL"}), 400
 
     # "browser" is not a TLS profile: it hands the request to a real browser,
     # which is the only mode that survives a managed challenge (native TLS, UA,
@@ -1396,15 +1441,34 @@ def _mp_version() -> str:
 
 
 def _parse_headers(raw: object) -> list[dict[str, str]]:
-    """Convert a stored JSON headers blob into HAR's name/value list."""
+    """Convert a stored header object or ordered pairs to HAR fields."""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             raw = {}
-    if not isinstance(raw, dict):
-        return []
-    return [{"name": str(k), "value": str(v)} for k, v in raw.items()]
+    if isinstance(raw, dict):
+        return [{"name": str(k), "value": str(v)} for k, v in raw.items()]
+    if isinstance(raw, list):
+        fields = []
+        for item in raw:
+            if isinstance(item, dict):
+                name, value = item.get("name"), item.get("value")
+            else:
+                try:
+                    name, value = item
+                except (TypeError, ValueError):
+                    continue
+            fields.append({"name": str(name), "value": str(value)})
+        return fields
+    return []
+
+
+def _har_headers(row: dict, legacy_key: str, raw_key: str) -> list[dict[str, str]]:
+    """Prefer lossless ordered fields while accepting every legacy DB row."""
+    raw = row.get(raw_key)
+    parsed = _parse_headers(raw) if raw not in (None, "", "[]") else []
+    return parsed or _parse_headers(row.get(legacy_key))
 
 
 def _iso_to_millis(ts: object) -> int:
@@ -1438,6 +1502,24 @@ def _row_to_har(r: dict) -> dict:
     total_ms = float(r.get("total_ms") or 0.0)
     req_body = r.get("body") or ""
     resp_body = r.get("response_body")
+    resp_state = r.get("response_body_state")
+    if not resp_state:
+        # Legacy rows did not carry capture-state metadata. Infer only what is
+        # knowable; a NULL body on a completed row was policy-omitted there.
+        resp_state = "complete" if resp_body is not None else (
+            "pending" if pending else "omitted"
+        )
+    request_size = r.get("request_body_len")
+    if request_size is None:
+        request_size = len(req_body.encode("utf-8", "replace"))
+    response_size = r.get("response_body_len")
+    if response_size is None and resp_body is not None:
+        response_size = len(resp_body.encode("utf-8", "replace"))
+    response_size_known = response_size is not None
+    stored_response_size = len((resp_body or "").encode("utf-8", "replace"))
+    omitted_reason = r.get("response_body_omitted_reason")
+    if resp_state == "omitted" and not omitted_reason:
+        omitted_reason = "legacy_content_type_policy"
     return {
         "startedDateTime": started,
         "time": round(total_ms, 2),
@@ -1447,10 +1529,10 @@ def _row_to_har(r: dict) -> dict:
             "method": r.get("method", "GET"),
             "url": r.get("url", ""),
             "httpVersion": "HTTP/1.1",
-            "headers": _parse_headers(r.get("headers")),
+            "headers": _har_headers(r, "headers", "headers_raw"),
             "queryString": qs,
             "headersSize": -1,
-            "bodySize": len(req_body.encode("utf-8", "replace")),
+            "bodySize": int(request_size),
             "postData": (
                 {
                     "mimeType": "application/octet-stream",
@@ -1464,16 +1546,25 @@ def _row_to_har(r: dict) -> dict:
             "status": int(code) if code else 0,
             "statusText": "" if pending else ("" if not code else ""),
             "httpVersion": "HTTP/1.1",
-            "headers": _parse_headers(r.get("response_headers")),
+            "headers": _har_headers(
+                r, "response_headers", "response_headers_raw"
+            ),
             "content": {
-                "size": len((resp_body or "").encode("utf-8", "replace")),
+                "size": int(response_size) if response_size_known else -1,
                 "mimeType": r.get("content_type") or "",
                 "text": resp_body if isinstance(resp_body, str) else "",
-                "comment": "response body not captured (non-API content type)" if resp_body is None else None,
+                "comment": (
+                    f"response body {resp_state}"
+                    + (f": {omitted_reason}" if omitted_reason else "")
+                    if resp_body is None or resp_state != "complete" else None
+                ),
             },
             "redirectURL": "",
             "headersSize": -1,
-            "bodySize": len((resp_body or "").encode("utf-8", "replace")),
+            "bodySize": int(response_size) if response_size_known else -1,
+            "_bodyCaptureState": resp_state,
+            "_bodyOmittedReason": omitted_reason,
+            "_bodyStoredSize": stored_response_size,
             "_transportError": error,
         },
         "cache": {},
@@ -1489,6 +1580,10 @@ def _row_to_har(r: dict) -> dict:
 def _body_ext(content_type: str) -> str:
     """Pick a sensible file extension for a stored body download."""
     ct = (content_type or "").split(";")[0].strip().lower()
+    if ct.endswith("+json"):
+        return "json"
+    if ct.endswith("+xml"):
+        return "xml"
     return {
         "application/json": "json",
         "text/html": "html",

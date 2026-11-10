@@ -4,3 +4,11 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
+intercept_queue.json
+intercept_decisions.json
+.pytest_cache/
+*.egg-info/
+build/
+.coverage
+htmlcov/
+.env

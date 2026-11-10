@@ -32,7 +32,241 @@ DEFAULT_MAX_DB_BYTES = 50 * 1024 * 1024
 # Bodies are capped so one huge upload/download cannot balloon the DB.
 MAX_BODY_BYTES = 100_000
 
+# Response bodies are intentionally buffered only for investigation-friendly
+# media types.  RFC 6839 structured suffixes matter here: problem details,
+# vendor APIs and GraphQL commonly use ``application/*+json`` rather than the
+# bare ``application/json`` type.
+_CAPTURED_CONTENT_TYPES = frozenset({
+    "application/json",
+    "text/html",
+    "text/xml",
+    "application/xml",
+    "text/plain",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data",
+})
+
 STATUS_CLASSES = {"2", "3", "4", "5", "0", "pending"}
+
+
+def truncate_utf8(value: str | None, byte_limit: int) -> tuple[str, int, bool]:
+    """Return a valid UTF-8 prefix, original byte length and truncation flag.
+
+    The database limit is a byte budget, not a Python-character budget.  A
+    character slice allowed 100,000 emoji to consume roughly 400,000 bytes.
+    Decode with ``ignore`` only at the cut boundary, so a multi-byte character
+    is never persisted half-encoded.
+    """
+    text = str(value or "")
+    encoded = text.encode("utf-8", "replace")
+    original_len = len(encoded)
+    limit = max(int(byte_limit), 0)
+    if original_len <= limit:
+        return text, original_len, False
+    return encoded[:limit].decode("utf-8", "ignore"), original_len, True
+
+
+def header_fields(headers: Any) -> list[list[str]]:
+    """Return ordered ``[name, value]`` fields, retaining duplicates.
+
+    mitmproxy's ``Headers.items(multi=True)`` is preferred.  Plain mappings
+    and already-materialised pair lists are accepted as well so this helper is
+    usable by tests, old embeddings and the dashboard without importing
+    mitmproxy here.
+    """
+    if headers is None:
+        return []
+    if isinstance(headers, (list, tuple)):
+        items = headers
+    else:
+        try:
+            items = headers.items(multi=True)
+        except TypeError:
+            items = headers.items()
+        except AttributeError:
+            return []
+    out: list[list[str]] = []
+    for item in items:
+        if isinstance(item, dict):
+            name, value = item.get("name"), item.get("value")
+        else:
+            try:
+                name, value = item
+            except (TypeError, ValueError):
+                continue
+        out.append([str(name), str(value)])
+    return out
+
+
+def capture_headers(headers: Any) -> tuple[dict[str, str], list[list[str]]]:
+    """Return the legacy flattened map plus lossless ordered raw fields.
+
+    ``headers`` remains a JSON object in SQLite for compatibility with the
+    frozen CLI, dashboard and TUI.  The additional raw field is authoritative
+    for faithful export/replay and keeps boundaries such as multiple
+    ``Set-Cookie`` fields that cannot safely be comma-folded.
+    """
+    raw = header_fields(headers)
+    if not isinstance(headers, (list, tuple)):
+        try:
+            legacy = {str(k): str(v) for k, v in dict(headers or {}).items()}
+            return legacy, raw
+        except (TypeError, ValueError):
+            pass
+
+    legacy: dict[str, str] = {}
+    names: dict[str, str] = {}
+    for name, value in raw:
+        lower = name.lower()
+        existing = names.get(lower)
+        if existing is None:
+            names[lower] = name
+            legacy[name] = value
+        else:
+            # This deliberately mirrors the old convenience representation.
+            # Consumers needing exact boundaries use the ordered raw field.
+            legacy[existing] = f"{legacy[existing]}, {value}"
+    return legacy, raw
+
+
+def response_body_policy(content_type: str | None) -> tuple[bool, str | None]:
+    """Return whether to buffer a response body and, when omitted, why."""
+    media_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    if media_type == "text/event-stream":
+        return False, "event_stream"
+    if media_type in _CAPTURED_CONTENT_TYPES:
+        return True, None
+    if media_type.startswith("application/"):
+        subtype = media_type.split("/", 1)[1]
+        if subtype.endswith(("+json", "+xml")):
+            return True, None
+    if not media_type:
+        return False, "missing_content_type"
+    return False, "content_type_policy"
+
+
+def is_captured_content_type(content_type: str | None) -> bool:
+    """Compatibility-friendly boolean form of :func:`response_body_policy`."""
+    return response_body_policy(content_type)[0]
+
+
+def persist_http_request(
+    database: "Database", request: Any, *, intercept_action: str | None = None,
+) -> int:
+    """Persist a mitmproxy-like request using the canonical capture schema."""
+    legacy, raw = capture_headers(getattr(request, "headers", None))
+    try:
+        body = request.text or ""
+        body_state = None
+    except (ValueError, UnicodeError):
+        body = ""
+        body_state = "unavailable"
+    kwargs: dict[str, Any] = {}
+    try:
+        # Real Database instances support the additive fidelity fields. Keep a
+        # positional legacy fallback for path-loaded consumer fakes/helpers
+        # that still implement only store_request(method, url, headers, body).
+        supports_raw = isinstance(database, Database)
+    except NameError:  # pragma: no cover - only during unusual import cycles
+        supports_raw = True
+    if supports_raw:
+        kwargs["raw_headers"] = raw
+    if body_state is not None:
+        kwargs["body_state"] = body_state
+    if intercept_action is not None:
+        kwargs["intercept_action"] = intercept_action
+    args = (
+        str(getattr(request, "method", "GET")),
+        str(getattr(request, "pretty_url", getattr(request, "url", ""))),
+        legacy,
+        body,
+    )
+    try:
+        return database.store_request(*args, **kwargs)
+    except TypeError as exc:
+        if kwargs and "unexpected keyword" in str(exc):
+            return database.store_request(*args)
+        raise
+
+
+def update_persisted_http_request(
+    database: "Database", req_id: int, request: Any, *,
+    intercept_action: str | None = None,
+) -> bool:
+    """Replace a pending row's request side with the exact request to send."""
+    legacy, raw = capture_headers(getattr(request, "headers", None))
+    try:
+        body = request.text or ""
+        body_state = None
+    except (ValueError, UnicodeError):
+        body = ""
+        body_state = "unavailable"
+    return database.update_request(
+        req_id,
+        method=str(getattr(request, "method", "GET")),
+        url=str(getattr(request, "pretty_url", getattr(request, "url", ""))),
+        headers=legacy,
+        raw_headers=raw,
+        body=body,
+        body_state=body_state,
+        intercept_action=intercept_action,
+    )
+
+
+def persist_http_response(
+    database: "Database", req_id: int, response: Any, *,
+    ttfb_ms: float | None = None, total_ms: float | None = None,
+) -> str:
+    """Persist a mitmproxy-like response under the shared bounded policy.
+
+    Returns the body capture state (``complete``, ``truncated``, ``omitted``
+    or ``unavailable``), which is useful to callers and focused tests.
+    """
+    legacy, raw = capture_headers(getattr(response, "headers", None))
+    content_type = ""
+    try:
+        content_type = response.headers.get("content-type", "")
+    except (AttributeError, TypeError):
+        pass
+    capture, reason = response_body_policy(content_type)
+    if not capture:
+        database.update_response_light(
+            req_id=req_id,
+            code=int(getattr(response, "status_code", 0)),
+            headers=legacy,
+            raw_headers=raw,
+            content_type=content_type,
+            ttfb_ms=ttfb_ms,
+            total_ms=total_ms,
+            body_state="omitted",
+            omitted_reason=reason,
+        )
+        return "omitted"
+    try:
+        body = response.text or ""
+    except (ValueError, UnicodeError):
+        database.update_response_light(
+            req_id=req_id,
+            code=int(getattr(response, "status_code", 0)),
+            headers=legacy,
+            raw_headers=raw,
+            content_type=content_type,
+            ttfb_ms=ttfb_ms,
+            total_ms=total_ms,
+            body_state="unavailable",
+            omitted_reason="decode_error",
+        )
+        return "unavailable"
+    return database.update_response(
+        req_id=req_id,
+        code=int(getattr(response, "status_code", 0)),
+        headers=legacy,
+        raw_headers=raw,
+        body=body,
+        content_type=content_type,
+        ttfb_ms=ttfb_ms,
+        total_ms=total_ms,
+    )
 
 # ── Noise model ──────────────────────────────────────────────────────
 # A browser session drags in a long tail of traffic that is never part of the
@@ -359,13 +593,20 @@ class Database:
                 method      TEXT NOT NULL,
                 url         TEXT NOT NULL,
                 headers     TEXT,
+                headers_raw TEXT,
                 body        TEXT,
+                request_body_state TEXT,
                 response_code    INTEGER,
                 response_headers TEXT,
+                response_headers_raw TEXT,
                 response_body    TEXT,
+                response_body_state TEXT,
+                response_body_omitted_reason TEXT,
                 content_type     TEXT,
                 ttfb_ms          REAL,
-                total_ms         REAL
+                total_ms         REAL,
+                flow_outcome     TEXT,
+                intercept_action TEXT
             );
 
             CREATE TABLE IF NOT EXISTS intruder_results (
@@ -501,6 +742,13 @@ class Database:
         for column, decl in (
             ("request_body_len", "INTEGER"),
             ("response_body_len", "INTEGER"),
+            ("headers_raw", "TEXT"),
+            ("response_headers_raw", "TEXT"),
+            ("request_body_state", "TEXT"),
+            ("response_body_state", "TEXT"),
+            ("response_body_omitted_reason", "TEXT"),
+            ("flow_outcome", "TEXT"),
+            ("intercept_action", "TEXT"),
         ):
             try:
                 conn.execute(f"ALTER TABLE requests ADD COLUMN {column} {decl}")
@@ -640,20 +888,31 @@ class Database:
         url: str,
         headers: dict[str, str],
         body: str,
+        *,
+        raw_headers: list[list[str]] | None = None,
+        body_state: str | None = None,
+        intercept_action: str | None = None,
     ) -> int:
+        stored_body, body_len, truncated = truncate_utf8(body, self.max_body_bytes)
+        if body_state is None:
+            body_state = "truncated" if truncated else "complete"
+        if raw_headers is None:
+            raw_headers = header_fields(headers)
         conn = self._connect()
         cur = conn.execute(
-            "INSERT INTO requests (timestamp, method, url, headers, body, request_body_len) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO requests (timestamp, method, url, headers, headers_raw,"
+            " body, request_body_len, request_body_state, flow_outcome,"
+            " intercept_action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
             (
                 datetime.now(timezone.utc).isoformat(),
                 method,
                 url,
                 json.dumps(headers),
-                # Cap request bodies like response bodies — a multi-MB upload
-                # would otherwise be stored whole and balloon the DB.
-                (body or "")[:self.max_body_bytes],
-                len(body or ""),
+                json.dumps(raw_headers),
+                stored_body,
+                body_len,
+                body_state,
+                intercept_action,
             ),
         )
         conn.commit()
@@ -661,6 +920,50 @@ class Database:
         conn.close()
         self.prune_if_needed()
         return row_id
+
+    def update_request(
+        self,
+        req_id: int,
+        *,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: str,
+        raw_headers: list[list[str]] | None = None,
+        body_state: str | None = None,
+        intercept_action: str | None = None,
+    ) -> bool:
+        """Replace the request side of a pending flow.
+
+        Manual interception calls this after an operator modification so the
+        eventual response is paired with the exact request that went upstream,
+        not the pre-edit request first shown in the queue.
+        """
+        stored_body, body_len, truncated = truncate_utf8(body, self.max_body_bytes)
+        if body_state is None:
+            body_state = "truncated" if truncated else "complete"
+        if raw_headers is None:
+            raw_headers = header_fields(headers)
+        conn = self._connect()
+        cur = conn.execute(
+            "UPDATE requests SET method=?, url=?, headers=?, headers_raw=?,"
+            " body=?, request_body_len=?, request_body_state=?,"
+            " intercept_action=COALESCE(?, intercept_action) WHERE id=?",
+            (
+                method,
+                url,
+                json.dumps(headers),
+                json.dumps(raw_headers),
+                stored_body,
+                body_len,
+                body_state,
+                intercept_action,
+                int(req_id),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return bool(cur.rowcount)
 
     def update_response(
         self,
@@ -671,16 +974,27 @@ class Database:
         content_type: str | None,
         ttfb_ms: float | None = None,
         total_ms: float | None = None,
-    ) -> None:
+        *,
+        raw_headers: list[list[str]] | None = None,
+    ) -> str:
+        stored_body, body_len, truncated = truncate_utf8(body, self.max_body_bytes)
+        body_state = "truncated" if truncated else "complete"
+        if raw_headers is None:
+            raw_headers = header_fields(headers)
         conn = self._connect()
         conn.execute(
-            "UPDATE requests SET response_code=?, response_headers=?, "
-            "response_body=?, response_body_len=?, content_type=?, ttfb_ms=?, total_ms=? WHERE id=?",
+            "UPDATE requests SET response_code=?, response_headers=?,"
+            " response_headers_raw=?, response_body=?, response_body_len=?,"
+            " response_body_state=?, response_body_omitted_reason=NULL,"
+            " content_type=?, ttfb_ms=?, total_ms=?, flow_outcome='completed'"
+            " WHERE id=?",
             (
                 code,
                 json.dumps(headers),
-                (body or "")[:self.max_body_bytes],
-                len(body or ""),
+                json.dumps(raw_headers),
+                stored_body,
+                body_len,
+                body_state,
                 content_type or "",
                 ttfb_ms,
                 total_ms,
@@ -689,6 +1003,7 @@ class Database:
         )
         conn.commit()
         conn.close()
+        return body_state
 
     def update_response_light(
         self,
@@ -698,14 +1013,26 @@ class Database:
         content_type: str | None,
         ttfb_ms: float | None = None,
         total_ms: float | None = None,
+        *,
+        raw_headers: list[list[str]] | None = None,
+        body_state: str = "omitted",
+        omitted_reason: str | None = "content_type_policy",
     ) -> None:
+        if raw_headers is None:
+            raw_headers = header_fields(headers)
         conn = self._connect()
         conn.execute(
-            "UPDATE requests SET response_code=?, response_headers=?, "
-            "content_type=?, ttfb_ms=?, total_ms=? WHERE id=?",
+            "UPDATE requests SET response_code=?, response_headers=?,"
+            " response_headers_raw=?, response_body=NULL, response_body_len=NULL,"
+            " response_body_state=?, response_body_omitted_reason=?,"
+            " content_type=?, ttfb_ms=?, total_ms=?, flow_outcome='completed'"
+            " WHERE id=?",
             (
                 code,
                 json.dumps(headers),
+                json.dumps(raw_headers),
+                body_state,
+                omitted_reason,
                 content_type or "",
                 ttfb_ms,
                 total_ms,
@@ -725,7 +1052,10 @@ class Database:
         conn = self._connect()
         conn.execute(
             "UPDATE requests SET response_code=0, response_headers=?, "
-            "content_type='' WHERE id=? AND response_code IS NULL",
+            "response_headers_raw='[]', content_type='',"
+            " response_body_state='unavailable',"
+            " response_body_omitted_reason='transport_error',"
+            " flow_outcome='error' WHERE id=? AND response_code IS NULL",
             (
                 json.dumps({"_error": str(error or "flow_error")[:200]}),
                 req_id,
@@ -733,6 +1063,42 @@ class Database:
         )
         conn.commit()
         conn.close()
+
+    def mark_request_outcome(
+        self,
+        req_id: int,
+        outcome: str,
+        *,
+        intercept_action: str | None = None,
+        error: str | None = None,
+    ) -> bool:
+        """Persist a terminal non-response outcome such as an operator drop."""
+        allowed = {"pending", "completed", "error", "dropped"}
+        if outcome not in allowed:
+            raise ValueError(f"invalid flow outcome: {outcome!r}")
+        sets = ["flow_outcome=?"]
+        params: list[Any] = [outcome]
+        if intercept_action is not None:
+            sets.append("intercept_action=?")
+            params.append(str(intercept_action)[:40])
+        if error is not None:
+            sets.extend([
+                "response_code=CASE WHEN response_code IS NULL THEN 0 ELSE response_code END",
+                "response_headers=CASE WHEN response_headers IS NULL THEN ? ELSE response_headers END",
+                "response_headers_raw=COALESCE(response_headers_raw, '[]')",
+                "response_body_state=COALESCE(response_body_state, 'unavailable')",
+                "response_body_omitted_reason=COALESCE(response_body_omitted_reason, ?)",
+            ])
+            message = str(error or "flow_error")[:200]
+            params.extend((json.dumps({"_error": message}), message))
+        params.append(int(req_id))
+        conn = self._connect()
+        cur = conn.execute(
+            f"UPDATE requests SET {', '.join(sets)} WHERE id=?", params
+        )
+        conn.commit()
+        conn.close()
+        return bool(cur.rowcount)
 
     # ── Filter compilation ────────────────────────────────────────────
     def _compile_filters(self, *, method: str = "", status_class: str = "",
@@ -1408,7 +1774,10 @@ class Database:
         ``<path>.noise-backup-<n>.db`` first, so an over-eager rule set is
         always recoverable. Returns the backup path and the removal breakdown.
         """
-        preview = self.scan_noise()
+        # The preview is also the deletion plan shown in the result.  Apply
+        # protected hosts here as well as in the delete loop so counts,
+        # by-host metadata and the decision to create a backup are truthful.
+        preview = self.scan_noise(keep_hosts=keep_hosts)
         backup_path = ""
         if backup and preview["matched"]:
             backup_path = self._backup_db()
@@ -1531,36 +1900,139 @@ class Database:
         """
         conn = self._connect()
         now = datetime.now(timezone.utc).isoformat()
-        for r in results:
-            try:
-                cur = conn.execute(
-                "INSERT INTO intruder_results "
-                "(request_id, job_id, timestamp, payload, method, url, headers, "
-                "body, response_code, response_body, response_headers, ttfb_ms, total_ms) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    r.get("request_id", 0),
-                    job_id,
-                    now,
-                    r.get("payload", ""),
-                    r.get("method", "GET"),
-                    r.get("url", ""),
-                    json.dumps(r.get("headers", {})),
-                    r.get("body", ""),
-                    r.get("response_code", 0),
-                    (r.get("response_body", "") or "")[:100_000],
-                    json.dumps(r.get("response_headers", {})),
-                    r.get("ttfb_ms"),
-                    r.get("total_ms"),
-                ),
+        row_ids: list[int] = []
+        try:
+            with conn:
+                for r in results:
+                    response_body, _, _ = truncate_utf8(
+                        r.get("response_body", ""), self.max_body_bytes
+                    )
+                    request_body, _, _ = truncate_utf8(
+                        r.get("body", ""), self.max_body_bytes
+                    )
+                    cur = conn.execute(
+                        "INSERT INTO intruder_results "
+                        "(request_id, job_id, timestamp, payload, method, url,"
+                        " headers, body, response_code, response_body,"
+                        " response_headers, ttfb_ms, total_ms) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            r.get("request_id", 0),
+                            job_id,
+                            now,
+                            r.get("payload", ""),
+                            r.get("method", "GET"),
+                            r.get("url", ""),
+                            json.dumps(r.get("headers", {})),
+                            request_body,
+                            r.get("response_code", 0),
+                            response_body,
+                            json.dumps(r.get("response_headers", {})),
+                            r.get("ttfb_ms"),
+                            r.get("total_ms"),
+                        ),
+                    )
+                    row_ids.append(int(cur.lastrowid))
+        finally:
+            conn.close()
+        # Mutate caller dictionaries only after the whole transaction commits.
+        for result, row_id in zip(results, row_ids):
+            result["id"] = row_id
+        return results
+
+    def commit_intruder_chunk(
+        self,
+        *,
+        job_id: int,
+        expected_progress: int,
+        progress: int,
+        results: list[dict[str, Any]],
+        complete: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Atomically persist one result chunk and its durable progress.
+
+        Progress is a commit watermark: every result below it exists in the
+        same SQLite transaction.  The expected-progress check also prevents
+        two dashboard processes from inserting the same resumed chunk.
+        """
+        conn = self._connect()
+        row_ids: list[int] = []
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            job = conn.execute(
+                "SELECT progress, status, total FROM intruder_jobs WHERE id=?",
+                (int(job_id),),
+            ).fetchone()
+            if job is None:
+                raise RuntimeError(f"Intruder job {job_id} no longer exists")
+            if job["status"] != "running":
+                raise RuntimeError(
+                    f"Intruder job {job_id} is {job['status']}, not running"
                 )
-                r["id"] = cur.lastrowid
-            except sqlite3.Error:
-                # FK violation (capture pruned mid-attack) or a malformed
-                # row must not lose the whole batch — skip and continue.
-                continue
-        conn.commit()
-        conn.close()
+            if int(job["progress"] or 0) != int(expected_progress):
+                raise RuntimeError(
+                    f"Intruder job {job_id} progress changed from "
+                    f"{expected_progress} to {job['progress']}"
+                )
+            if int(progress) != int(expected_progress) + len(results):
+                raise ValueError("Intruder progress must equal the committed result count")
+            if int(progress) > int(job["total"]):
+                raise ValueError("Intruder progress exceeds job total")
+
+            # A restarted dashboard can encounter rows committed by an older
+            # implementation that crashed before advancing progress. Remove
+            # that uncommitted tail before retrying this offset so durable
+            # progress and result count cannot diverge or duplicate.
+            conn.execute(
+                "DELETE FROM intruder_results WHERE job_id=? AND id NOT IN "
+                "(SELECT id FROM intruder_results WHERE job_id=? ORDER BY id LIMIT ?)",
+                (int(job_id), int(job_id), int(expected_progress)),
+            )
+
+            for r in results:
+                response_body, _, _ = truncate_utf8(
+                    r.get("response_body", ""), self.max_body_bytes
+                )
+                request_body, _, _ = truncate_utf8(
+                    r.get("body", ""), self.max_body_bytes
+                )
+                cur = conn.execute(
+                    "INSERT INTO intruder_results "
+                    "(request_id, job_id, timestamp, payload, method, url, headers,"
+                    " body, response_code, response_body, response_headers,"
+                    " ttfb_ms, total_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        r.get("request_id", 0), int(job_id), now,
+                        r.get("payload", ""), r.get("method", "GET"),
+                        r.get("url", ""), json.dumps(r.get("headers", {})),
+                        request_body, r.get("response_code", 0), response_body,
+                        json.dumps(r.get("response_headers", {})),
+                        r.get("ttfb_ms"), r.get("total_ms"),
+                    ),
+                )
+                row_ids.append(int(cur.lastrowid))
+
+            status = "done" if complete else "running"
+            cur = conn.execute(
+                "UPDATE intruder_jobs SET progress=?, status=?, error=NULL,"
+                " updated=? WHERE id=? AND status='running' AND progress=?",
+                (
+                    int(progress), status, now, int(job_id),
+                    int(expected_progress),
+                ),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("Intruder job changed during chunk commit")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        for result, row_id in zip(results, row_ids):
+            result["id"] = row_id
         return results
 
     def get_intruder_results(self, request_id: int) -> list[dict[str, Any]]:

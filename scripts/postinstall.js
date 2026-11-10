@@ -16,8 +16,15 @@ try {
   if (all.some(python => check(python))) {
     console.log(`✓ Matching MiniProxy ${target} and safe proxy dependencies found.`);
   } else {
-    const python = all.find(p => supportedPython(p));
-    if (!python) throw new Error('Python 3.12+ not found');
+    const python = all.find(p => {
+      if (!supportedPython(p)) return false;
+      const overlap = spawnSync(p, ['-c',
+        'from importlib.metadata import version,PackageNotFoundError\ntry: version("mitmproxy")\nexcept PackageNotFoundError: raise SystemExit(0)\nraise SystemExit(1)'],
+        { timeout: 10000, stdio: 'ignore' });
+      return overlap.status === 0 && spawnSync(p, ['-m', 'pip', '--version'],
+        { timeout: 10000, stdio: 'ignore' }).status === 0;
+    });
+    if (!python) throw new Error('No supported Python with pip and non-overlapping proxy ownership found');
     // Do not mutate an overlapping install: uninstalling either distribution
     // removes files owned by the other. Operators must migrate explicitly.
     const overlap = spawnSync(python, ['-c',

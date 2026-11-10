@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -34,7 +35,7 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 CHROME = shutil.which("google-chrome") or shutil.which("chromium")
 pytestmark = pytest.mark.skipif(not CHROME, reason="chrome not installed")
 
-SRC = "/root/projects/miniproxy/src"
+SRC = str(Path(__file__).resolve().parents[1] / "src")
 PORT = 5291
 # The poll interval is 2000ms; every wait below is comfortably longer.
 POLL = 3200

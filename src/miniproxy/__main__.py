@@ -93,14 +93,20 @@ def _dashboard_reachability_notes(dash_host: str, dash_port: int | str) -> list[
 
 def _port_arg(value: str) -> int | str:
     """--port values: an int, or 'auto' for always-pick-a-free-port."""
-    text = str(value).strip().lower()
-    if text in ("auto", "0"):
-        return "auto"
+    from miniproxy.server import validate_port
     try:
-        return int(text)
+        return validate_port(value)
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"invalid port {value!r} — use a number or 'auto'") from None
+            f"invalid port {value!r} — use 1..65535 or 'auto'") from None
+
+
+def _fixed_port_arg(value: str) -> int:
+    from miniproxy.server import validate_port
+    try:
+        return validate_port(value, allow_auto=False)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def _same_option(p: argparse.ArgumentParser, flag: str) -> dict:
@@ -166,6 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Proxy listen port (default 8080; 'auto' always "
                               "picks a free port; a busy port moves up)")
     p_start.add_argument("--db", default=None, help="SQLite capture DB path")
+    p_start.add_argument("--json", action="store_true", help="Versioned machine-readable result")
     p_start.add_argument("--scope", nargs="*", default=None,
                          help="Capture-scope hosts (*.domain wildcards); "
                               "out-of-scope traffic is not captured")
@@ -201,14 +208,27 @@ def build_parser() -> argparse.ArgumentParser:
                               "e.g. --allow-client 203.0.113.7")
 
     p_web = sub.add_parser("web", help="Start the proxy AND the web dashboard (alias of start)")
-    for opt in ("--port", "--db", "--scope", "--mitmdump", "--dashboard-port",
+    for opt in ("--port", "--db", "--json", "--scope", "--mitmdump", "--dashboard-port",
                 "--dashboard-host", "--dashboard-token", "--no-dashboard",
                 "--proxy-host", "--allow-client"):
         p_web.add_argument(opt, **_same_option(p_start, opt))
     p_web.add_argument("--block-out-of-scope", action="store_true")
 
-    sub.add_parser("stop", help="Stop the proxy and the dashboard")
-    sub.add_parser("status", help="Proxy + dashboard status")
+    for name, help_text in (("stop", "Stop the proxy and the dashboard"),
+                            ("status", "Proxy + dashboard status"),
+                            ("health", "Bounded local listener/capture readiness")):
+        command = sub.add_parser(name, help=help_text)
+        command.add_argument("--json", action="store_true", help="Versioned machine-readable result")
+    for name in ("capabilities", "addon-manifest"):
+        command = sub.add_parser(name, help="Local versioned automation contract")
+        command.add_argument("--json", action="store_true", help="JSON (also the default for this command)")
+    p_endpoints = sub.add_parser("endpoints", help="Bounded machine-readable captured endpoint inventory")
+    p_endpoints.add_argument("--db", default=None)
+    p_endpoints.add_argument("--limit", type=int, default=5000)
+    p_endpoints.add_argument("--host", default="")
+    p_endpoints.add_argument("--before-id", type=int, default=None)
+    p_endpoints.add_argument("--since-id", type=int, default=0)
+    p_endpoints.add_argument("--json", action="store_true", help="JSON (the default)")
 
     p_dash = sub.add_parser("dashboard", help="Run the Flask dashboard")
     p_dash.add_argument("--port", type=_port_arg, default=5000)
@@ -223,7 +243,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_connect.add_argument("--host", default=None,
                            help="Override the advertised proxy host (default: "
                                 "auto-detect the best reachable address)")
-    p_connect.add_argument("--port", type=int, default=None,
+    p_connect.add_argument("--port", type=_fixed_port_arg, default=None,
                            help="Override the advertised proxy port "
                                 "(default: the running proxy, else 8080)")
     p_connect.add_argument("--qr", choices=["auto", "yes", "no"], default="auto",
@@ -244,6 +264,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_log = sub.add_parser("log", help="Show captured requests")
     p_log.add_argument("--id", type=int, default=None)
     p_log.add_argument("--limit", type=int, default=30)
+    p_log.add_argument("--db", default=None)
+    p_log.add_argument("--json", action="store_true")
+    p_log.add_argument("--before-id", type=int, default=None)
+    p_log.add_argument("--since-id", type=int, default=0)
+    p_log.add_argument("--host", default="")
+    p_log.add_argument("--method", default="")
+    p_log.add_argument("--status-class", default="")
+    p_log.add_argument("--url-contains", default="")
+    p_log.add_argument("--body-contains", default="")
+    p_export = sub.add_parser("export", help="Export one bounded filtered capture page")
+    for flag, settings in (("--db", {"default": None}), ("--limit", {"type": int, "default": 100}),
+                           ("--before-id", {"type": int, "default": None}), ("--since-id", {"type": int, "default": 0}),
+                           ("--host", {"default": ""}), ("--method", {"default": ""}),
+                           ("--status-class", {"default": ""}), ("--url-contains", {"default": ""}),
+                           ("--body-contains", {"default": ""})):
+        p_export.add_argument(flag, **settings)
+    p_export.add_argument("--format", choices=("json", "jsonl"), default="json")
 
     p_noise = sub.add_parser(
         "noise",
@@ -287,17 +324,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _open_db(db_path=None):
+def _open_db(db_path=None, *, read_only=False):
     """Open the capture DB the same way `log` does (proxy.db under STATE_DIR).
 
     Precedence matches the rest of the CLI: explicit --db, then
     MINIPROXY_DB_PATH, then the default session DB.
     """
     from miniproxy.addon.db import Database
-    from miniproxy.server import STATE_DIR
-
-    return Database(db_path or os.environ.get("MINIPROXY_DB_PATH")
-                    or (STATE_DIR / "proxy.db"))
+    from miniproxy.server import capture_db_path
+    if read_only:
+        from miniproxy.automation import open_evidence
+        return open_evidence(capture_db_path(db_path))
+    return Database(capture_db_path(db_path))
 
 
 def _cmd_noise(args) -> int:
@@ -433,6 +471,61 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.command in ("capabilities", "addon-manifest"):
+        import json
+        from miniproxy.automation import capabilities, addon_manifest
+        print(json.dumps(capabilities() if args.command == "capabilities" else addon_manifest(), sort_keys=True))
+        return 0
+
+    if args.command == "health":
+        import json
+        from miniproxy.server import health
+        result = health()
+        print(json.dumps(result, sort_keys=True) if args.json else
+              f"{result['status']}: process={result['process_alive']} listener={result['listener_ready']} capture={result['capture_ready']}")
+        return 0 if result["ready"] else 1
+
+    if args.command == "endpoints":
+        import json
+        import sqlite3
+        from miniproxy.automation import endpoint_inventory
+        try:
+            result = endpoint_inventory(_open_db(args.db, read_only=True), limit=args.limit, host=args.host,
+                                        before_id=args.before_id, since_id=args.since_id)
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            print(json.dumps({"schema_version": 1, "status": "error", "message": str(exc)}))
+            return 2
+        print(json.dumps(result))
+        return 0
+
+    if args.command == "export" or (args.command == "log" and args.json):
+        import json
+        import sqlite3
+        from miniproxy.automation import query
+        try:
+            db = _open_db(args.db, read_only=True)
+            if args.command == "log" and args.id is not None:
+                item = db.get_request(args.id)
+                print(json.dumps({"schema_version": 1, "item": item}))
+                return 0 if item is not None else 1
+            result = query(db, limit=args.limit, before_id=args.before_id, since_id=args.since_id,
+                           host=args.host, method=args.method, status_class=args.status_class,
+                           url_substr=args.url_contains, body_substr=args.body_contains)
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            result = {"schema_version": 1, "status": "error", "message": str(exc)}
+            if getattr(args, "format", "json") == "jsonl":
+                result["type"] = "error"
+            print(json.dumps(result))
+            return 2
+        if getattr(args, "format", "json") == "jsonl":
+            # Typed metadata record retains continuation without mixing prose into JSONL.
+            print(json.dumps({"type": "metadata", **{k: v for k, v in result.items() if k != "items"}}))
+            for item in result["items"]:
+                print(json.dumps({"type": "flow", "item": item}))
+        else:
+            print(json.dumps(result))
+        return 0
+
     if args.command == "version":
         print(_version())
         return 0
@@ -451,6 +544,10 @@ def main(argv: list[str] | None = None) -> int:
             allow_clients=getattr(args, "allow_client", None),
             proxy_host=getattr(args, "proxy_host", "127.0.0.1"),
         )
+        if args.json:
+            import json
+            print(json.dumps({"schema_version": 1, **result}, sort_keys=True))
+            return 0 if result["status"] in ("started", "already_running") and (result.get("dashboard") or {}).get("status") != "error" else 1
         # The proxy always runs with block_global=false so a remote browser
         # can point at it. Combined with a non-loopback bind that is an open
         # relay: any host that can reach the port captures through it and
@@ -514,15 +611,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "stop":
         from miniproxy import server
         result = server.stop()
-        print(result["message"])
         dash = server.stop_dashboard()
-        print(dash["message"])
+        if args.json:
+            import json
+            print(json.dumps({"schema_version": 1, "proxy": result, "dashboard": dash}))
+        else:
+            print(result["message"])
+            print(dash["message"])
         ok = result["status"] in ("stopped", "not_running") and dash["status"] in ("stopped", "not_running")
         return 0 if ok else 1
 
     if args.command == "status":
         from miniproxy import server
         result = server.status()
+        if args.json:
+            import json
+            print(json.dumps({"schema_version": 1, **result}, sort_keys=True))
+            return 0 if result["status"] == "running" else 1
         print(result["message"])
         dash_port = result.get("dashboard")
         if result["status"] == "running" and dash_port:
@@ -657,9 +762,16 @@ def main(argv: list[str] | None = None) -> int:
         # Reads the capture DB directly — the dashboard does not need to
         # be running to inspect what the proxy captured.
         from miniproxy.addon.db import Database
-        from miniproxy.server import STATE_DIR
-
-        db = Database(os.environ.get("MINIPROXY_DB_PATH") or (STATE_DIR / "proxy.db"))
+        from miniproxy.automation import query
+        import sqlite3
+        try:
+            db = _open_db(args.db, read_only=True)
+            logs = query(db, limit=args.limit, before_id=args.before_id, since_id=args.since_id,
+                         host=args.host, method=args.method, status_class=args.status_class,
+                         url_substr=args.url_contains, body_substr=args.body_contains)["items"]
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         if args.id is not None:
             row = db.get_request(args.id)
             if row is None:
@@ -673,14 +785,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Headers: {str(row.get('headers') or '')[:500]}")
             print(f"Body:    {str(row.get('body') or '')[:1000]}")
             return 0
-        logs = db.get_logs(limit=max(args.limit, 1))
         print(f"{'ID':>4} {'METHOD':<7} {'STATUS':<5} {'MS':>7}  URL")
         print("-" * 72)
         for r in logs:
             ms = r.get("total_ms")
             ms_s = f"{ms:.0f}" if isinstance(ms, (int, float)) else "?"
             print(f"{r.get('id', '?'):>4} {r.get('method', '?'):<7} "
-                  f"{r.get('response_code', '?'):<5} {ms_s:>7}  "
+                  f"{str(r.get('response_code') if r.get('response_code') is not None else 'pending'):<5} {ms_s:>7}  "
                   f"{str(r.get('url', ''))[:60]}")
         if not logs:
             print("(no captured requests yet)")

@@ -12,6 +12,41 @@ Releases are published to [PyPI](https://pypi.org/project/riciplay-miniproxy/)
 
 ## [Unreleased]
 
+## [0.9.8] — 2026-11-09
+
+- Adds versioned JSON status/start/stop, local health, capabilities and addon
+  SHA-256 manifest commands; filtered JSON/JSONL evidence queries use stable
+  descending ID cursors with transactional counts.
+- Evidence readers use read-only existing databases, reject missing/schema-less
+  captures, retain typed JSONL errors, and apply filters in human log output too.
+- Persists authoritative per-process session metadata (DB, scope, bind, port and
+  creation identity) in private atomic files; legacy unknown DB metadata is not
+  fabricated from the caller environment.
+- Validates ports before bind/spawn, normalizes numeric zero to auto, bounds port
+  fallback and probes a concrete dashboard address instead of always loopback.
+- Preserves inherited canonical scope modes, rejects compact listener/addon
+  overrides, uses verified manifest listener metadata, and reports sidecar
+  contradictions instead of claiming readiness.
+- Keeps the maintained `riciplay-mitmproxy==12.3.1.1` and Tornado 6.6 ownership
+  requirements unchanged. npm requires Node 18+ and the exact public Python
+  version; publication remains PyPI first.
+- Excludes package-local capture/queue runtime artifacts from wheels/sdists and
+  ships the npm publication regression with the npm package.
+- Commits Intruder chunks and progress atomically, preserving the last durable
+  offset on a failed result write rather than falsely reporting completion.
+- Captures structured-suffix JSON/XML bodies, preserves ordered duplicate raw
+  headers alongside legacy object fields, and adds explicit body state/outcome
+  metadata. UTF-8 byte caps no longer count Unicode characters as bytes.
+- Shares capture persistence between regular and manual interception; stores the
+  modified request actually sent, retires decisions/queue entries, and records
+  drops/timeout decisions. Packaged queue state is private and per capture DB;
+  path-deployed legacy queue files remain supported for existing consumers.
+- Makes Host-only rewrites survive the actual request hook and scope-checks the
+  resulting authority before capture/forwarding. This fixes an ineffective
+  rewrite, not a previously verified scope-bypass vulnerability.
+- Validates malformed Repeater method/URL inputs as JSON errors and keeps
+  noise-clean preview consistent with protected hosts.
+
 ## [0.9.7] — release candidate
 
 - Requires Python 3.12+ and replaces upstream mitmproxy with the independently

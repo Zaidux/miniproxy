@@ -105,6 +105,24 @@ def test_noise_scan_honours_keep_hosts(tmp_path):
     assert with_keep["matched"] == 1
 
 
+def test_clean_noise_result_and_backup_decision_honour_keep_hosts(
+    tmp_path, monkeypatch,
+):
+    db = Database(str(tmp_path / "proxy.db"))
+    db.add_noise_rule("keep.example", "host", True)
+    db.store_request("GET", "https://keep.example/a", {}, "")
+    backups = []
+    monkeypatch.setattr(db, "_backup_db", lambda: backups.append(True) or "backup.db")
+
+    result = db.clean_noise(keep_hosts=["keep.example"])
+
+    assert result["removed"] == 0
+    assert result["by_host"] == []
+    assert result["backup"] == ""
+    assert backups == []
+    assert db.count_logs() == 1
+
+
 # ── destination filters and static classification ────────────────────
 
 def test_host_filter_is_exact_for_a_full_hostname(db):

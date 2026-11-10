@@ -15,8 +15,8 @@ import pytest
 from miniproxy import __main__ as cli
 
 ALL_COMMANDS = [
-    "start", "web", "stop", "status", "dashboard",
-    "connect", "tui", "send", "log", "noise", "version",
+    "start", "web", "stop", "status", "health", "capabilities", "addon-manifest", "endpoints", "dashboard",
+    "connect", "tui", "send", "log", "export", "noise", "version",
 ]
 
 
